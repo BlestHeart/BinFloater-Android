@@ -273,7 +273,8 @@ bash build.sh
 
 产物在 `build/BinIME.apk`。
 
-签名密钥在 `build/binf.keystore`（密码 `binf123456`）。
+签名密钥在 `signing/binf.keystore`（口令默认 `binf123456`，可用 `BINF_KS_PASS` 覆盖）。
+密钥本体不进版本库，需要自己备份。
 **分发前请重新生成密钥**，否则任何人都能签出同签名包替换你发布的应用。
 
 ## 测试
@@ -399,18 +400,22 @@ git diff                        # 看还没提交的改动
 | `app/` 全部源码、资源、**词库** | `build/`（81 MB 中间产物 + 下载的词典源，可重新生成） |
 | `tools/` 全部脚本和测试 | `dist/*.apk`（每次构建都整个变，git 存二进制是整份存的） |
 | `dist/*.png` 预览图 | `.class`、`__pycache__` |
-| `signing/binf.keystore` **签名密钥** | |
+| `signing/README.md` 密钥说明 | `signing/*.keystore` **签名密钥本体** |
 | `README.md`、`build.sh`、`run_tests.sh` | |
 
 仓库总共 51 个文件、8.6 MB（词库占 8.0 MB），`.git` 目录 8.6 MB。
 
 ### 两个特意处理过的地方
 
-**1. 签名密钥从 `build/` 挪到了 `signing/`**
+**1. 签名密钥留在本地，不进仓库**
 
-`build.sh` 原来把密钥生成在 `build/binf.keystore`。`build/` 被 `.gitignore` 排掉了，
+`build.sh` 原来把密钥生成在 `build/binf.keystore`，而 `build/` 被 `.gitignore` 排掉了，
 密钥跟着丢的话，下次构建签名就变，手机上没法覆盖安装（只能先卸载，设置全丢）。
-现在密钥在 `signing/binf.keystore`，跟着仓库走，见 [signing/README.md](signing/README.md)。
+所以挪到了 `signing/binf.keystore`，那个目录不会被 `build.sh` 清理。
+
+但**密钥本体不进版本库**：密钥 + 口令进了公开仓库，任何人都能签出同包名同签名的
+APK，手机会把它当成正常更新装进去。`.gitignore` 排掉了 `signing/*.keystore`，
+只提交说明文档。换机器时把自己的密钥放进去即可，见 [signing/README.md](signing/README.md)。
 
 **2. 词典源文件用脚本重新拉**
 

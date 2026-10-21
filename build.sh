@@ -67,23 +67,33 @@ PYEOF
 "$BT/zipalign.exe" -f -p 4 "$OUT/unsigned.apk" "$OUT/aligned.apk"
 
 echo "==> 6/7 生成签名密钥（首次）"
-# 密钥放 signing/ 而不是 build/：build/ 被 .gitignore 排掉了，
-# 密钥要是跟着丢了，下次构建签名就变，手机上没法覆盖安装。
+# 密钥放 signing/ 而不是 build/：build/ 是中间产物目录，随时可清。
+# 密钥一旦丢了，下次构建出来的签名就变了，手机上没法覆盖安装旧版。
+#
+# 注意：signing/*.keystore 在 .gitignore 里，不进版本库。
+# 密钥 + 口令进公开仓库 = 任何人都能签出同包名同签名的 APK，
+# 手机会把它当成正常更新装进去。所以密钥只留在本地，自己备份好。
 KEYSTORE="$PROJ/signing/binf.keystore"
+# 口令可以用环境变量覆盖；不设就用这个默认值。
+# 密钥文件本身不公开，所以默认口令不算秘密。
+KS_PASS="${BINF_KS_PASS:-binf123456}"
 mkdir -p "$PROJ/signing"
 if [ ! -f "$KEYSTORE" ]; then
+  echo "    没找到密钥，生成一个新的（首次构建）"
   "$KEYTOOL" -genkeypair -v \
     -keystore "$KEYSTORE" \
     -alias binf \
     -keyalg RSA -keysize 2048 -validity 10000 \
-    -storepass binf123456 -keypass binf123456 \
+    -storepass "$KS_PASS" -keypass "$KS_PASS" \
     -dname "CN=BinFloater, OU=Binf, O=Binf, L=CN, ST=CN, C=CN" 2>&1 | tail -3
+else
+  echo "    复用已有密钥 signing/binf.keystore"
 fi
 
 echo "==> 7/7 apksigner 签名"
 "$BT/apksigner.bat" sign \
   --ks "$KEYSTORE" --ks-key-alias binf \
-  --ks-pass pass:binf123456 --key-pass pass:binf123456 \
+  --ks-pass "pass:$KS_PASS" --key-pass "pass:$KS_PASS" \
   --out "$OUT/$APK_NAME" \
   "$OUT/aligned.apk"
 

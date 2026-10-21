@@ -233,7 +233,7 @@ binfloater-android/
 │       ├── MainActivity.java   主界面（引导 + 设置）
 │       └── FloatingService.java 悬浮窗
 ├── tools/                      词典编译、预览图生成、10 个测试类
-├── signing/                    签名密钥（见 signing/README.md）
+├── signing/                    签名密钥说明（密钥本体不进仓库）
 └── dist/                       预览图
 ```
 
