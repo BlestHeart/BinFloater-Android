@@ -371,3 +371,57 @@ bash run_tests.sh          # 一键跑完，任一失败退出码非 0
   必须用 `setOnTouchListener` 自己管 `ACTION_DOWN`/`ACTION_UP`。
 - **锁定拼音要跟着数字串复位**：按新数字键时 `t9PickedPinyin` 必须清空，
   否则会拿上一次的拼音去查新的数字串。
+
+---
+
+## 版本管理
+
+仓库就在项目目录本身（`G:\DeepSeek Harness\binfloater-android\.git`），已经建好并提交了首个快照。
+
+### 常用命令
+
+```bash
+git status                      # 看现在改了什么
+git add -A && git commit -m "说明"   # 拍一个快照
+git log --oneline               # 看所有快照
+git show <版本号>               # 看某个快照改了什么
+git checkout <版本号> -- 文件    # 把某个文件退回某个版本
+git diff                        # 看还没提交的改动
+```
+
+### 什么东西进了仓库
+
+| 进 | 不进 |
+|---|---|
+| `app/` 全部源码、资源、**词库** | `build/`（81 MB 中间产物 + 下载的词典源，可重新生成） |
+| `tools/` 全部脚本和测试 | `dist/*.apk`（每次构建都整个变，git 存二进制是整份存的） |
+| `dist/*.png` 预览图 | `.class`、`__pycache__` |
+| `signing/binf.keystore` **签名密钥** | |
+| `README.md`、`build.sh`、`run_tests.sh` | |
+
+仓库总共 51 个文件、8.6 MB（词库占 8.0 MB），`.git` 目录 8.6 MB。
+
+### 两个特意处理过的地方
+
+**1. 签名密钥从 `build/` 挪到了 `signing/`**
+
+`build.sh` 原来把密钥生成在 `build/binf.keystore`。`build/` 被 `.gitignore` 排掉了，
+密钥跟着丢的话，下次构建签名就变，手机上没法覆盖安装（只能先卸载，设置全丢）。
+现在密钥在 `signing/binf.keystore`，跟着仓库走，见 [signing/README.md](signing/README.md)。
+
+**2. 词典源文件用脚本重新拉**
+
+`build/dictsrc/` 里那 45 MB 的 rime-ice 原始词典不进仓库。需要重建词库时：
+
+```bash
+bash tools/fetch_dictsrc.sh     # 从 iDvel/rime-ice 下载四个 .dict.yaml
+python tools/build_dict.py      # 编译成 app/assets/pinyin.dict.gz
+```
+
+但**编译好的 `app/assets/pinyin.dict.gz` 是提交了的**，所以 clone 下来直接 `bash build.sh` 就能出包，
+只有想改词库时才需要跑上面两步。
+
+### 行尾
+
+`.gitattributes` 里统一成 LF（`* text=auto eol=lf`）。这个项目在 Windows 上用 bash 构建，
+`.sh` 文件要是被转成 CRLF，bash 会报 `\r: command not found`。`.bat` 除外，保持 CRLF。
