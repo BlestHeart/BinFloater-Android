@@ -243,5 +243,5 @@ MIT，见 [LICENSE](LICENSE)。
 ## 相关
 
 - **[DEVELOPMENT.md](DEVELOPMENT.md)** —— 开发笔记：构建细节、测试体系、设计取舍、踩过的坑
-- Windows 版（剪切板自动监听 + 悬浮窗）：见同级目录 `binfloater/`
+- **Windows 版**（剪切板自动监听 + 悬浮窗）：同一套编解码核心的桌面端实现，不在本仓库
 - 词库来源：[iDvel/rime-ice](https://github.com/iDvel/rime-ice)
