@@ -263,5 +263,5 @@ AI 工具：[DeepSeek Harness](https://github.com/deepseek-ai)（DeepSeek-V4 系
 ## 相关
 
 - **[DEVELOPMENT.md](DEVELOPMENT.md)** —— 开发笔记：构建细节、测试体系、设计取舍、踩过的坑
-- **Windows 版**（剪切板自动监听 + 悬浮窗）：同一套编解码核心的桌面端实现，不在本仓库
+- **[BinFloater](https://github.com/BlestHeart/BinFloater)** —— Windows 桌面版：剪切板里的 0/1 串自动翻译成文字，也能把文字转成二进制，常驻悬浮窗（独立仓库）
 - 词库来源：[iDvel/rime-ice](https://github.com/iDvel/rime-ice)
