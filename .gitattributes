@@ -1,0 +1,28 @@
+# 属性文件：告诉 git 哪些是二进制、哪些行尾怎么处理
+
+# ─── 行尾 ───────────────────────────────────────────────────
+# 源码和脚本一律 LF。这个项目全程在 Windows 上用 bash 构建，
+# 如果 git 把 .sh 转成 CRLF，bash 会报 "\r: command not found"。
+* text=auto eol=lf
+
+# Windows 上双击运行的批处理必须 CRLF，否则 cmd 可能不认
+*.bat text eol=crlf
+
+# ─── 二进制（不做行尾转换，也不做文本 diff）────────────────
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.apk binary
+*.keystore binary
+*.gz binary
+*.jar binary
+*.dex binary
+*.so binary
+*.zip binary
+
+# ─── 语言统计 ───────────────────────────────────────────────
+# 让 GitHub 的语言条正确识别：.java 是主语言
+*.java linguist-language=Java
+*.sh linguist-language=Shell
