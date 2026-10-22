@@ -7,7 +7,7 @@
 `.gitignore` 排掉了 `signing/*.keystore`。
 
 原因：密钥 + 口令一旦进公开仓库，任何人都能签出**同包名、同签名**的 APK，
-Android 会把它当成正常更新装进已经装了 BinIME 的手机里。这不是理论风险——
+Android 会把它当成正常更新装进已经装了本应用的手机里。这不是理论风险——
 签名是 Android 判断"是不是同一个应用"的唯一依据。
 
 所以密钥只留在本地。**自己备份好**（网盘、U 盘都行），丢了就只能换新密钥，
@@ -30,7 +30,7 @@ Android 会把它当成正常更新装进已经装了 BinIME 的手机里。这�
 
 ```bash
 java -jar "$ANDROID_SDK/build-tools/36.0.0/lib/apksigner.jar" \
-  verify --print-certs dist/BinIME.apk
+  verify --print-certs dist/BinFloater.apk
 ```
 
 注意：`build-tools/36.0.0/apksigner` 这个无扩展名文件**不存在**，

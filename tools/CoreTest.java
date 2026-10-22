@@ -1,4 +1,4 @@
-import com.binf.ime.BinCore;
+import com.binf.floater.BinCore;
 
 /** BinCore 自测：不依赖 Android，可直接用 java 运行。 */
 public class CoreTest {

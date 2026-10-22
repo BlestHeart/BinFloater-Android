@@ -12,12 +12,12 @@ JAVAC="$JAVA_HOME/bin/javac"
 KEYTOOL="$JAVA_HOME/bin/keytool"
 
 OUT="$PROJ/build"
-APK_NAME="BinIME.apk"
-PKG="com.binf.ime"
+APK_NAME="BinFloater.apk"
+PKG="com.binf.floater"
 MIN_SDK=34
 TARGET_SDK=36
-VERSION_CODE=1
-VERSION_NAME="1.0"
+VERSION_CODE=2
+VERSION_NAME="2.0"
 
 echo "==> 清理"
 rm -rf "$OUT/gen" "$OUT/classes" "$OUT/dex" "$OUT/flat" "$OUT/base.apk" "$OUT/$APK_NAME"
@@ -33,7 +33,6 @@ echo "==> 2/7 aapt2 link 生成 R.java + 基础 APK"
   -I "$PLATFORM" \
   --manifest "$PROJ/app/AndroidManifest.xml" \
   --java "$OUT/gen" \
-  -A "$PROJ/app/assets" \
   --min-sdk-version $MIN_SDK \
   --target-sdk-version $TARGET_SDK \
   --version-code $VERSION_CODE \

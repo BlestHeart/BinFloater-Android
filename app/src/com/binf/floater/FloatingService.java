@@ -1,4 +1,4 @@
-package com.binf.ime;
+package com.binf.floater;
 
 import android.app.Notification;
 import android.app.NotificationChannel;
@@ -12,7 +12,9 @@ import android.content.Intent;
 import android.graphics.PixelFormat;
 import android.graphics.Typeface;
 import android.os.Build;
+import android.os.Handler;
 import android.os.IBinder;
+import android.os.Looper;
 import android.text.Editable;
 import android.text.InputType;
 import android.text.TextWatcher;
@@ -29,10 +31,15 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 /**
- * 可选悬浮窗。
+ * 悬浮窗：桌面上一个小气泡，点开就是转换面板。
  *
- * 说明：Android 10+ 禁止后台应用读取剪切板，所以这里不主动监听，
- * 而是用户点「读剪切板」时才读取一次（属于用户手势触发）。
+ * 设计取舍（重要，别改回去）：
+ * Android 10 起，没有焦点的应用读剪切板一律拿到空内容。想「后台自动监听剪切板」
+ * 只有两条路：root / 无障碍服务。都不该为这个工具申请。
+ *
+ * 所以这里的做法是：点气泡 → 面板浮起来并抢到焦点 → 这时读剪切板是合法的
+ * → 读完立刻把结果填进面板。用户点一下，就完成一次「读 → 判断方向 → 出结果」。
+ * 代价是点的那一下会收起当前键盘，换来的是不用申请任何敏感权限。
  */
 public class FloatingService extends Service {
 
@@ -40,7 +47,6 @@ public class FloatingService extends Service {
     private static final int NOTIF_ID = 1001;
 
     private static final int BG = 0xFF0F1117;
-    private static final int CARD = 0xFF171B24;
     private static final int CARD_HI = 0xFF1D2230;
     private static final int TEXT = 0xFFE6EBF5;
     private static final int MUTED = 0xFF8992A7;
@@ -58,13 +64,21 @@ public class FloatingService extends Service {
     private EditText input;
     private TextView output;
     private TextView status;
+    private TextView dirLabel;
     private boolean textToBin = true;
     private boolean compact = false;
+
+    private Handler handler;
+    /** 面板拿到焦点后，等这么久再读剪切板。太快系统还没把焦点交过来，读出来还是空。 */
+    private static final int CLIP_DELAY_MS = 120;
+    /** 打开面板时自动读一次剪切板的标记，避免面板重绘时反复读。 */
+    private boolean autoReadPending = false;
 
     @Override
     public void onCreate() {
         super.onCreate();
         wm = (WindowManager) getSystemService(Context.WINDOW_SERVICE);
+        handler = new Handler(Looper.getMainLooper());
         startForegroundSafe();
         createBubble();
     }
@@ -83,7 +97,7 @@ public class FloatingService extends Service {
                     PendingIntent.FLAG_IMMUTABLE);
             Notification n = new Notification.Builder(this, CHANNEL_ID)
                     .setContentTitle("二进制悬浮窗运行中")
-                    .setContentText("点按悬浮按钮打开面板")
+                    .setContentText("点按悬浮球打开转换面板")
                     .setSmallIcon(android.R.drawable.ic_menu_edit)
                     .setContentIntent(pi)
                     .setOngoing(true)
@@ -104,7 +118,7 @@ public class FloatingService extends Service {
         return WindowManager.LayoutParams.TYPE_PHONE;
     }
 
-    // ---------- 悬浮按钮 ----------
+    // ---------- 悬浮球 ----------
 
     private void createBubble() {
         bubble = new LinearLayout(this);
@@ -128,6 +142,7 @@ public class FloatingService extends Service {
         c.setGravity(Gravity.CENTER);
         bubble.addView(c);
 
+        // 气泡必须 NOT_FOCUSABLE：它只是个按钮，抢焦点会打断用户正在做的事。
         bubbleLp = new WindowManager.LayoutParams(
                 WindowManager.LayoutParams.WRAP_CONTENT,
                 WindowManager.LayoutParams.WRAP_CONTENT,
@@ -193,6 +208,8 @@ public class FloatingService extends Service {
 
     private void showPanel() {
         if (panel == null) panel = buildPanel();
+        // 面板要能输入、也要能读到剪切板 —— 所以它必须**可获焦**。
+        // 只加 FLAG_NOT_TOUCH_MODAL，不加 FLAG_NOT_FOCUSABLE。
         panelLp = new WindowManager.LayoutParams(
                 dp(292),
                 WindowManager.LayoutParams.WRAP_CONTENT,
@@ -204,9 +221,18 @@ public class FloatingService extends Service {
         try {
             wm.addView(panel, panelLp);
             panelVisible = true;
+            // 面板刚拿到焦点，剪切板这时才读得到。等一小会儿再读。
+            autoReadPending = true;
+            handler.postDelayed(this::readClipIfPending, CLIP_DELAY_MS);
         } catch (Exception e) {
             toast("无法显示面板");
         }
+    }
+
+    private void readClipIfPending() {
+        if (!autoReadPending || !panelVisible) return;
+        autoReadPending = false;
+        readClip(true);
     }
 
     private void syncPanelPos() {
@@ -222,6 +248,7 @@ public class FloatingService extends Service {
         if (panelVisible && panel != null) {
             try { wm.removeView(panel); } catch (Exception ignored) {}
             panelVisible = false;
+            autoReadPending = false;
         }
     }
 
@@ -245,7 +272,7 @@ public class FloatingService extends Service {
                 ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
         TextView swap = smallBtn("⇄");
-        swap.setOnClickListener(v -> { textToBin = !textToBin; refresh(); });
+        swap.setOnClickListener(v -> { textToBin = !textToBin; updateDir(); refresh(); });
         head.addView(swap);
 
         TextView close = smallBtn("✕");
@@ -262,11 +289,11 @@ public class FloatingService extends Service {
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
         // 方向说明
-        final TextView dir = new TextView(this);
-        dir.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11);
-        dir.setTextColor(TEAL);
-        dir.setPadding(0, dp(6), 0, dp(2));
-        root.addView(dir);
+        dirLabel = new TextView(this);
+        dirLabel.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11);
+        dirLabel.setTextColor(TEAL);
+        dirLabel.setPadding(0, dp(6), 0, dp(2));
+        root.addView(dirLabel);
 
         // 输入
         input = new EditText(this);
@@ -317,9 +344,10 @@ public class FloatingService extends Service {
         root.addView(row, rlp);
 
         row.addView(actionBtn("复制", v -> copyOutput()), weight(1f));
-        row.addView(actionBtn("读剪切板", v -> readClip()), weight(1.3f));
+        row.addView(actionBtn("读剪切板", v -> readClip(false)), weight(1.3f));
         row.addView(actionBtn("清空", v -> { input.setText(""); refresh(); }), weight(1f));
 
+        updateDir();
         refresh();
         return root;
     }
@@ -352,10 +380,14 @@ public class FloatingService extends Service {
         return tv;
     }
 
+    private void updateDir() {
+        if (dirLabel == null) return;
+        dirLabel.setText(textToBin ? "文字 → 二进制" : "二进制 → 文字");
+    }
+
     private void refresh() {
         if (input == null || output == null || status == null) return;
         String in = input.getText().toString();
-        // 方向标签通过面板重建来更新，这里只更新输出
         if (in.isEmpty()) {
             output.setText("");
             status.setText(textToBin ? "输入文字，下方出二进制" : "粘贴 0/1 串，下方出译文");
@@ -392,26 +424,39 @@ public class FloatingService extends Service {
         }
     }
 
-    private void readClip() {
+    /**
+     * 读一次剪切板并转换。
+     *
+     * @param silent 自动触发时为 true：剪切板空或内容没变就不弹 toast，免得每次都吵。
+     */
+    private void readClip(boolean silent) {
         try {
             ClipboardManager cm = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
-            if (cm == null || !cm.hasPrimaryClip()) { toast("剪切板是空的"); return; }
-            ClipData clip = cm.getPrimaryClip();
-            if (clip == null || clip.getItemCount() == 0) { toast("剪切板是空的"); return; }
-            CharSequence cs = clip.getItemAt(0).coerceToText(this);
-            if (cs == null || cs.length() == 0) { toast("剪切板没有文字"); return; }
-            String text = cs.toString();
-            // 自动判断方向，二进制就译，文字就转
-            if (BinCore.looksLikeBinary(text)) {
-                textToBin = false;
-            } else {
-                textToBin = true;
+            if (cm == null || !cm.hasPrimaryClip()) {
+                if (!silent) toast("剪切板是空的");
+                return;
             }
+            ClipData clip = cm.getPrimaryClip();
+            if (clip == null || clip.getItemCount() == 0) {
+                if (!silent) toast("剪切板是空的");
+                return;
+            }
+            CharSequence cs = clip.getItemAt(0).coerceToText(this);
+            if (cs == null || cs.length() == 0) {
+                if (!silent) toast("剪切板没有文字");
+                return;
+            }
+            String text = cs.toString();
+            // 和当前输入一样就不动，避免用户正在手打时被覆盖
+            if (text.equals(input.getText().toString())) return;
+            // 自动判断方向：像二进制就译，否则转成二进制
+            textToBin = !BinCore.looksLikeBinary(text);
             input.setText(text);
+            updateDir();
             refresh();
-            toast(textToBin ? "已转成二进制" : "已译成文字");
+            if (!silent) toast(textToBin ? "已转成二进制" : "已译成文字");
         } catch (Exception e) {
-            toast("读取剪切板失败：" + e.getMessage());
+            if (!silent) toast("读取剪切板失败：" + e.getMessage());
         }
     }
 
@@ -422,6 +467,7 @@ public class FloatingService extends Service {
     @Override
     public void onDestroy() {
         super.onDestroy();
+        if (handler != null) handler.removeCallbacksAndMessages(null);
         if (bubble != null) {
             try { wm.removeView(bubble); } catch (Exception ignored) {}
             bubble = null;

@@ -1,4 +1,4 @@
-package com.binf.ime;
+package com.binf.floater;
 
 import java.io.ByteArrayOutputStream;
 import java.nio.charset.Charset;

@@ -5,7 +5,7 @@
 #   bash tools/push_github.sh <你的GitHub用户名> [仓库名]
 #
 # 例：
-#   bash tools/push_github.sh BlestHeart binime
+#   bash tools/push_github.sh BlestHeart binfloater-android
 #
 # 前置条件（二选一）：
 #   A. 装了 gh CLI 且已 gh auth login  → 脚本会自己建仓库再推
@@ -17,7 +17,7 @@
 set -euo pipefail
 
 USER_NAME="${1:-}"
-REPO_NAME="${2:-binime}"
+REPO_NAME="${2:-binfloater-android}"
 PROXY="${PROXY:-http://127.0.0.1:7890}"
 
 if [ -z "$USER_NAME" ]; then
@@ -79,7 +79,7 @@ else
     echo "→ 检测到已登录的 gh CLI，自动创建仓库 ${USER_NAME}/${REPO_NAME} ..."
     gh repo create "${USER_NAME}/${REPO_NAME}" \
       --public \
-      --description "一个能输入二进制的安卓输入法（含完整拼音引擎）" \
+      --description "安卓二进制悬浮窗：点一下把剪切板里的 0/1 串翻译成文字（全部由 AI 制作）" \
       --source . \
       --remote origin \
       --push || true
@@ -106,7 +106,7 @@ echo "完成 → https://github.com/${USER_NAME}/${REPO_NAME}"
 echo
 echo "接下来可以做的事："
 echo "  1. 打 tag 发布 APK："
-echo "     git tag -a v1.2 -m 'BinIME v1.2' && git push origin v1.2"
-echo "     然后在网页 Releases 里基于这个 tag 发布，上传 build/BinIME.apk"
+echo "     git tag -a v2.0 -m 'BinFloater 安卓版 v2.0' && git push origin v2.0"
+echo "     然后在网页 Releases 里基于这个 tag 发布，上传 build/BinFloater.apk"
 echo "  2. 仓库描述 / 话题（topics）在网页右侧 About 里填，"
-echo "     建议话题：android ime input-method pinyin binary keyboard coloros"
+echo "     建议话题：android overlay floating-window binary converter clipboard coloros"

@@ -1,22 +1,17 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    package="com.binf.ime"
-    android:versionCode="1"
-    android:versionName="1.0">
+    package="com.binf.floater"
+    android:versionCode="2"
+    android:versionName="2.0">
 
     <uses-sdk android:minSdkVersion="34" android:targetSdkVersion="36" />
 
-    <!-- 可选悬浮窗 -->
+    <!-- 悬浮窗 -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
-    <!-- 云端补词（可用开关关闭，关闭后不联网） -->
-    <uses-permission android:name="android.permission.INTERNET" />
-    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
-
-    <!-- 输入法本体 -->
     <application
         android:label="@string/app_name"
         android:icon="@mipmap/ic_launcher"
@@ -34,21 +29,6 @@
             </intent-filter>
         </activity>
 
-        <!-- 输入法服务 -->
-        <service
-            android:name=".BinImeService"
-            android:exported="true"
-            android:permission="android.permission.BIND_INPUT_METHOD"
-            android:label="@string/ime_name">
-            <intent-filter>
-                <action android:name="android.view.InputMethod" />
-            </intent-filter>
-            <meta-data
-                android:name="android.view.im"
-                android:resource="@xml/method" />
-        </service>
-
-        <!-- 可选悬浮窗服务 -->
         <service
             android:name=".FloatingService"
             android:exported="false"
