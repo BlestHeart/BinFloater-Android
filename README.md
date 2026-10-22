@@ -152,7 +152,7 @@ run_tests.sh                   一键回归
 ## 相关
 
 - **[DEVELOPMENT.md](DEVELOPMENT.md)** —— 开发笔记：构建细节、测试体系、设计取舍、踩过的坑
-- **Windows 版**（[BinFloater-Desktop](https://github.com/BlestHeart/BinFloater)）：同一套编解码核心的桌面端实现，剪切板自动监听 + 悬浮窗
+- **Windows 版**（[BinFloater](https://github.com/BlestHeart/BinFloater)）：同一套编解码核心的桌面端实现，剪切板自动监听 + 悬浮窗
 - **前身**：这个仓库 v2.0 之前是个带二进制面板的安卓输入法（含 54.8 万条离线拼音词库），后来砍掉输入法部分只留悬浮窗。输入法代码在 git 历史里。
 
 ---
