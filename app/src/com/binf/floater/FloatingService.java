@@ -9,6 +9,7 @@ import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Context;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.graphics.PixelFormat;
 import android.graphics.Typeface;
 import android.os.Build;
@@ -77,10 +78,21 @@ public class FloatingService extends Service {
     @Override
     public void onCreate() {
         super.onCreate();
+        // 服务真的起来了，开关状态就跟着「开」。和 onDestroy 里的回写配对，
+        // 不管是从主界面开、被系统重启、还是长按 ✕ 关，主界面显示的永远是实际状态。
+        setEnabledPref(true);
         wm = (WindowManager) getSystemService(Context.WINDOW_SERVICE);
         handler = new Handler(Looper.getMainLooper());
         startForegroundSafe();
         createBubble();
+    }
+
+    private void setEnabledPref(boolean on) {
+        try {
+            SharedPreferences p = getSharedPreferences("binf", Context.MODE_PRIVATE);
+            p.edit().putBoolean("floating_enabled", on).apply();
+        } catch (Exception ignored) {
+        }
     }
 
     private void startForegroundSafe() {
@@ -275,10 +287,18 @@ public class FloatingService extends Service {
         swap.setOnClickListener(v -> { textToBin = !textToBin; updateDir(); refresh(); });
         head.addView(swap);
 
+        // ✕ 只收起面板，悬浮球留着。
+        // 以前这里是 hidePanel() + stopSelf()，一点整个前台服务就停了，
+        // 悬浮球跟着消失，用户还得回主界面重新打开 —— 那是关掉程序，不是收面板。
+        // 真要彻底关掉，长按这个按钮，或者在主界面关掉开关。
         TextView close = smallBtn("✕");
-        close.setOnClickListener(v -> {
+        close.setContentDescription("收起面板");
+        close.setOnClickListener(v -> hidePanel());
+        close.setOnLongClickListener(v -> {
             hidePanel();
+            toast("悬浮窗已关闭");
             stopSelf();
+            return true;
         });
         LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
@@ -467,6 +487,11 @@ public class FloatingService extends Service {
     @Override
     public void onDestroy() {
         super.onDestroy();
+        // 服务没了，开关就得跟着回到「关」。
+        // 长按面板上的 ✕ 走的是 stopSelf()，不经过主界面的开关回调；
+        // 系统回收服务也一样。少这一步，主界面会一直显示「✅ 悬浮窗运行中」，
+        // 但桌面上根本没有小球 —— 用户还得回软件重新开关一次才能恢复。
+        setEnabledPref(false);
         if (handler != null) handler.removeCallbacksAndMessages(null);
         if (bubble != null) {
             try { wm.removeView(bubble); } catch (Exception ignored) {}

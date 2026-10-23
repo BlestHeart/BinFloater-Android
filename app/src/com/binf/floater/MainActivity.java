@@ -39,6 +39,8 @@ public class MainActivity extends Activity {
     private TextView permView;
     private LinearLayout root;
     private Switch floatingSwitch;
+    /** 回填开关状态时置位，避免 setChecked() 反过来触发监听器。 */
+    private boolean syncingSwitch = false;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -51,9 +53,15 @@ public class MainActivity extends Activity {
     protected void onResume() {
         super.onResume();
         refreshStatus();
-        // 从权限设置页回来时开关要跟着实际状态走
+        // 从权限设置页回来时开关要跟着实际状态走。
+        // 服务可能在我们看不见的时候被系统回收，或者被长按 ✕ 关掉——
+        // 那时候 prefs 已经是 false，这里把开关也拉回去。
+        // setChecked() 会触发 OnCheckedChangeListener，得先屏蔽掉，
+        // 否则一次回填会顺带再 start/stop 一次服务。
         if (floatingSwitch != null) {
+            syncingSwitch = true;
             floatingSwitch.setChecked(prefs.getBoolean("floating_enabled", false));
+            syncingSwitch = false;
         }
     }
 
@@ -226,6 +234,7 @@ public class MainActivity extends Activity {
         floatingSwitch = new Switch(this);
         floatingSwitch.setChecked(prefs.getBoolean("floating_enabled", false));
         floatingSwitch.setOnCheckedChangeListener((btn, checked) -> {
+            if (syncingSwitch) return;
             if (checked) {
                 if (!canDrawOverlays()) {
                     toast("请先允许「显示在其他应用上层」");

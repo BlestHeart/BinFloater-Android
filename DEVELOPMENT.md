@@ -60,12 +60,12 @@ d8 --min-api 34 --output build/dex build/classes/**/*.class
 bash run_tests.sh
 ```
 
-两组共 80 项断言：
+两组共累计 89 项：
 
 | 组 | 项数 | 测什么 |
 |---|---|---|
 | 编解码核心 | 37 | `BinCore` 的双向转换、分隔符、编码回退、阈值判定 |
-| 静态审查 | 43 | 读源码做约束检查（见下） |
+| 静态审查 | 52 | 读源码做约束检查（见下） |
 
 ### 为什么有「静态审查」这一组
 
@@ -139,6 +139,41 @@ panelLp.flags = FLAG_NOT_TOUCH_MODAL;
 
 用 `getRawX()` 而不是 `getX()`：后者是相对于父容器的，窗口移动后坐标会跳。
 
+### 关闭按钮只收面板，不停服务
+
+面板右上角那个 `✕` 一开始写的是 `hidePanel() + stopSelf()`。`stopSelf()` 会停掉整个
+前台服务，悬浮球跟着一起消失——用户的理解是「点了叉把面板收起来」，结果连入口都没了，
+只能回主界面重新打开。这不是预期行为。
+
+现在拆成两个动作：
+
+- **点一下** → 只 `hidePanel()`，悬浮球留着，随时能再点开
+- **长按** → `hidePanel() + toast + stopSelf()`，这才是彻底关掉
+
+要彻底关掉也可以回主界面关「悬浮窗」开关，那条路一直存在。
+
+### 服务死活要和开关状态对上
+
+`floating_enabled` 这个偏好决定主界面显示「✅ 悬浮窗运行中」还是「⚙️ 没开」。
+它以前只在主界面的开关回调里写，于是长按 `✕` 走 `stopSelf()` 时没人更新它——
+服务已经没了，主界面还理直气壮说「运行中」，桌面上却找不到小球。系统低内存回收
+前台服务也是同一条路径。
+
+现在改成服务自己维护：
+
+```java
+onCreate()  → setEnabledPref(true)
+onDestroy() → setEnabledPref(false)
+```
+
+主界面的开关回调照旧写一次（用户点开关的即时反馈），服务这边兜住「服务实际死活」
+这个事实源。两边写同一个值，谁后写都不会写错。
+
+回填开关时有个副作用要防：`setChecked()` 会触发 `OnCheckedChangeListener`，不屏蔽的话
+一次「同步状态」会顺带再 start/stop 一次服务。用 `syncingSwitch` 标志位挡住。
+
+静态审查加 5 项守着（47 → 52）。
+
 ### 方向自动识别
 
 ```java
@@ -198,7 +233,7 @@ app/
     MainActivity.java          设置界面
 tools/
   CoreTest.java                37 项编解码测试
-  StaticAudit.java             43 项源码约束检查
+  StaticAudit.java             52 项源码约束检查
   push_github.sh               推送脚本
 signing/
   README.md                    密钥说明（密钥本身不进 git）
@@ -257,7 +292,7 @@ v2.0 的改动：
 | APK 大小 | 8.1 MB | 29 KB |
 | `classes.dex` | 105 KB | 29 KB |
 | 源文件 | 9 个 | 3 个 |
-| 测试断言 | 467 项 | 80 项 |
+| 测试断言 | 467 项 | 89 项 |
 | 权限 | 6 个（含 INTERNET） | 4 个 |
 
 输入法代码全部在 git 历史里（v1.2 的 tag/commit），需要的话能翻出来。

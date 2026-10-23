@@ -43,6 +43,28 @@ public class StaticAudit {
         check("onDestroy 清理视图", flo.contains("onDestroy"), "");
         check("拖动用 rawX/rawY", flo.contains("getRawX"), "");
 
+        System.out.println("=== A2. 关闭按钮只收面板 ===");
+        // ✕ 必须只收面板，不能把整个前台服务停掉——停了悬浮球也没了，
+        // 用户还得回主界面重开。要彻底关掉走长按。
+        check("✕ 有独立点击处理", flo.contains("close.setOnClickListener"), "");
+        check("✕ 只收起面板", flo.contains("close.setOnClickListener(v -> hidePanel())"), "");
+        check("✕ 长按才关服务", flo.contains("close.setOnLongClickListener"), "");
+        check("✕ 有无障碍描述", flo.contains("setContentDescription(\"收起面板\")"), "");
+        // 长按 ✕ 走 stopSelf()，不经过主界面开关回调。服务死了开关必须回落，
+        // 否则主界面一直显示「运行中」，桌面上却没有小球。
+        String floCode = stripComments(flo);
+        int destroyAt = floCode.indexOf("public void onDestroy()");
+        String destroyBody = destroyAt < 0 ? "" : floCode.substring(destroyAt);
+        check("onDestroy 把开关回落成关", destroyBody.contains("setEnabledPref(false)"), "");
+        int createAt = floCode.indexOf("public void onCreate()");
+        String createBody = createAt < 0 ? "" : floCode.substring(createAt, Math.max(destroyAt, 0));
+        check("onCreate 把开关置成开", createBody.contains("setEnabledPref(true)"), "");
+        check("开关状态写进 SharedPreferences(\"binf\")",
+                floCode.contains("getSharedPreferences(\"binf\""), "");
+        // 主界面 onResume 回填开关时会触发监听器，不屏蔽就会白跑一次 start/stop 服务。
+        check("回填开关有 syncingSwitch 屏蔽", main.contains("syncingSwitch"), "");
+        check("监听器开头就 return", main.contains("if (syncingSwitch) return;"), "");
+
         System.out.println("=== B. 剪切板读取 ===");
         check("读剪切板有 try", flo.contains("catch (Exception e)"), "");
         check("检查 hasPrimaryClip", flo.contains("hasPrimaryClip"), "");
