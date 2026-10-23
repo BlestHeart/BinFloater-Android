@@ -258,6 +258,23 @@ run_tests.sh                   一键回归
 
 **`signing/*.keystore` 不进 git 的理由**：任何人拿到都能签出同包名同签名 APK，手机会当正常更新装进去。这个文件曾经被提交过，后来用 `git filter-branch` 从全部历史里清掉了。
 
+### 什么时候才开新版本号
+
+**不是修一个 bug 就发一个版本。** 这个项目是给一个人用的工具，版本号太碎没有意义，
+用户也不会为了一个开关状态的小修去重新下载 APK。
+
+约定：
+
+- 攒着。同一批「同一类问题」的修复合成一个 tag，一个 Release 只挂一份 APK
+- 已经发出去的版本发现还有同类问题，**就地把 tag 移过去、覆盖 Release 里的 APK**，
+  不新开 v2.1.1 / v2.2。`git tag -d v2.1 && git tag -a v2.1` 然后
+  `git push -f origin refs/tags/v2.1`，Release 的 `delete-asset` + `upload --clobber`
+- 版本号（`AndroidManifest.xml` 的 `versionCode` / `versionName`、`build.sh` 里的
+  `VERSION_CODE` / `VERSION_NAME`）只在真正要发新版本时才动，平时修 bug 不动它
+- 真要开新版本时，`versionCode` 必须递增，否则手机上装不上
+
+判断标准很简单：**用户需不需要知道这个版本存在**。内部修复、行为微调 → 不需要。
+
 ### 行尾
 
 `.gitattributes` 约定 `* text=auto eol=lf`，`*.bat text eol=crlf`，png/apk/keystore/gz/dex 标 binary。
