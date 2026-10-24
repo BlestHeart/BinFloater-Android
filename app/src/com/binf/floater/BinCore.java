@@ -24,6 +24,14 @@ public final class BinCore {
 
     /** 判定阈值：去掉分隔符后至少 16 位，且只含 0/1。 */
     public static final int MIN_BITS = 16;
+    /**
+     * 单次处理的位数上限。判定和解码共用同一个值 —— 以前只有判定有上限、
+     * 解码没有，于是同一段超长 0/1 串「自动识别」判成文字、「手动切到解码」却能译，
+     * 行为自相矛盾。
+     */
+    public static final int MAX_BITS = 20000;
+    /** 解码结果里不可打印字符占比超过这个值，就认为多半解错了。 */
+    public static final double MAX_CONTROL_RATIO = 0.3;
 
     /** 从任意文本里提取纯 0/1 位串。 */
     public static String cleanBits(String text) {
@@ -38,21 +46,26 @@ public final class BinCore {
     public static boolean looksLikeBinary(String text) {
         if (text == null) return false;
         String raw = text.trim();
-        if (raw.isEmpty() || raw.length() > 20000) return false;
+        if (raw.isEmpty()) return false;
         String bits = cleanBits(raw);
+        // 上限必须比**去掉分隔符后**的位数，和 binaryToText 用同一个口径。
+        // 以前这里比的是 raw.length()（含空格），于是同一段带分组的超长位串
+        // 「自动识别」判成文字、「手动切到解码」却能译，方向还会被判反。
+        if (bits.length() > MAX_BITS) return false;
         if (bits.length() < MIN_BITS) return false;
         for (int i = 0; i < bits.length(); i++) {
             char c = bits.charAt(i);
             if (c != '0' && c != '1') return false;
         }
-        // 短串必须同时包含 0 和 1，避免把 "1111111111111111" 之类误判
-        if (bits.length() < 24 && !(bits.indexOf('0') >= 0 && bits.indexOf('1') >= 0)) {
+        // 短串必须同时包含 0 和 1，避免把 "1111111111111111" 之类误判。
+        // 边界是 <=24：正好 24 位的纯 1 串以前会漏过检查被判成二进制。
+        if (bits.length() <= 24 && !(bits.indexOf('0') >= 0 && bits.indexOf('1') >= 0)) {
             return false;
         }
         return true;
     }
 
-    /** 位串转字节，末尾不足 8 位左侧补 0。 */
+    /** 位串转字节。末尾不足 8 位时在**右侧**补 0（bit 流从高位开始读）。 */
     public static byte[] bitsToBytes(String bits) {
         if (bits == null || bits.isEmpty()) return new byte[0];
         int pad = (8 - bits.length() % 8) % 8;
@@ -68,17 +81,58 @@ public final class BinCore {
 
     /** 字节转文本，依次尝试多种编码。 */
     public static String bytesToText(byte[] data) {
-        for (String enc : new String[]{"UTF-8", "GBK", "Big5", "ISO-8859-1"}) {
-            try {
-                Charset cs = Charset.forName(enc);
-                java.nio.charset.CharsetDecoder dec = cs.newDecoder();
-                dec.onMalformedInput(java.nio.charset.CodingErrorAction.REPORT);
-                dec.onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT);
-                return dec.decode(java.nio.ByteBuffer.wrap(data)).toString();
-            } catch (Exception ignored) {
-            }
+        if (data == null || data.length == 0) return "";
+        // 1) 严格 UTF-8：能过就一定是它，中文/emoji 都走这条。
+        String utf8 = strictDecode(data, "UTF-8");
+        if (utf8 != null) return utf8;
+        // 2) 剩下的是 GBK 或 Big5。两者都是「对很多错误字节也能成功解码」的宽编码，
+        //    单靠「谁先成功」会误判（Big5 正文常被 GBK 抢先解成乱码），所以两个都解、
+        //    再按「像不像正常中文」打分选赢的那个。
+        String gbk = strictDecode(data, "GBK");
+        String big5 = strictDecode(data, "Big5");
+        if (gbk != null && big5 != null) {
+            return scoreText(big5) > scoreText(gbk) ? big5 : gbk;
         }
-        return new String(data, UTF8);
+        if (gbk != null) return gbk;
+        if (big5 != null) return big5;
+        // 3) 都不是——只能兜底。ISO-8859-1 对任意字节都成功，
+        //    所以它必须留在最后，放前面会让上面所有分支失效。
+        return new String(data, Charset.forName("ISO-8859-1"));
+    }
+
+    /** 严格解码，解不出（或含不可映射字符）返回 null。 */
+    private static String strictDecode(byte[] data, String enc) {
+        try {
+            Charset cs = Charset.forName(enc);
+            java.nio.charset.CharsetDecoder dec = cs.newDecoder();
+            dec.onMalformedInput(java.nio.charset.CodingErrorAction.REPORT);
+            dec.onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT);
+            return dec.decode(java.nio.ByteBuffer.wrap(data)).toString();
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /**
+     * 给一段解码结果打分：常用汉字、ASCII 可打印、常见标点加分；
+     * 控制字符、私用区、生僻扩展区扣分。用来在 GBK / Big5 之间挑更像正文的那个。
+     */
+    public static int scoreText(String s) {
+        if (s == null || s.isEmpty()) return Integer.MIN_VALUE;
+        int score = 0;
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            if (c >= 0x20 && c < 0x7F) score += 2;              // ASCII 可打印
+            else if (c >= 0x4E00 && c <= 0x9FFF) score += 3;    // 常用汉字区
+            else if (c >= 0x3000 && c <= 0x303F) score += 2;    // 中日韩标点
+            else if (c >= 0xFF00 && c <= 0xFFEF) score += 1;    // 全角符号
+            else if (c == '\n' || c == '\t' || c == '\r') score += 1;
+            else if (c < 0x20) score -= 10;                     // 控制字符
+            else if (c >= 0xE000 && c <= 0xF8FF) score -= 8;    // 私用区
+            else if (c >= 0x3400 && c <= 0x4DBF) score -= 1;    // 扩展 A 生僻字
+            else score -= 2;                                    // 其它可疑字符
+        }
+        return score;
     }
 
     /** 解码结果。 */
@@ -107,6 +161,11 @@ public final class BinCore {
         if (bits.isEmpty()) {
             return new DecodeResult(null, "没有可识别的 0/1 位串", false, 0, 0);
         }
+        // 和 looksLikeBinary 用同一个上限，别再出现「自动识别不认、手动解码能译」。
+        if (bits.length() > MAX_BITS) {
+            return new DecodeResult(null, "内容过长（" + bits.length()
+                    + " 位），最多支持 " + MAX_BITS + " 位", false, 0, bits.length());
+        }
         for (int i = 0; i < bits.length(); i++) {
             char c = bits.charAt(i);
             if (c != '0' && c != '1') {
@@ -120,10 +179,75 @@ public final class BinCore {
         int rest = n % 8;
         byte[] data = bitsToBytes(bits);
         String text = bytesToText(data);
+        // 解出一堆控制字符说明多半解错了（比如把一段纯 1 当二进制）。
+        // 以前 00000000 会译出 NUL 显示成空白，状态行还报「已解码 1 字节」。
+        int ctrl = countControls(text);
+        if (!text.isEmpty() && ctrl > text.length() * MAX_CONTROL_RATIO) {
+            // 位数不是 8 的倍数时，补 0 本身就可能造出假的 0x00 字节，
+            // 所以先把「补 0」这件事说清楚，再报控制字符。
+            String padNote = rest == 0 ? ""
+                    : "（位数 " + n + " 不是 8 的倍数，末尾 " + rest + " 位已补 0）";
+            return new DecodeResult(null, "解出 " + ctrl + " 个不可打印字符（共 "
+                    + text.length() + " 个），这段可能不是二进制" + padNote
+                    + "。十六进制：" + previewHex(data, 24), false, data.length, n);
+        }
         String msg = rest == 0
                 ? "已解码 " + data.length + " 字节 / " + n + " 位"
                 : "位数 " + n + " 不是 8 的倍数，末尾 " + rest + " 位已补 0";
         return new DecodeResult(text, msg, true, data.length, n);
+    }
+
+    /** 统计控制字符个数（换行/制表/回车不算）。 */
+    public static int countControls(String s) {
+        if (s == null) return 0;
+        int c = 0;
+        for (int i = 0; i < s.length(); i++) {
+            char ch = s.charAt(i);
+            if (ch < 0x20 && ch != '\n' && ch != '\t' && ch != '\r') c++;
+        }
+        return c;
+    }
+
+    /** 字节 -> 十六进制串（完整，不截断）。 */
+    private static String textToHexBytes(byte[] data) {
+        if (data == null || data.length == 0) return "";
+        StringBuilder sb = new StringBuilder(data.length * 3);
+        for (int i = 0; i < data.length; i++) {
+            if (i > 0) sb.append(' ');
+            sb.append(String.format("%02X", data[i] & 0xFF));
+        }
+        return sb.toString();
+    }
+
+    /**
+     * 字节 -> 十六进制串的**预览**（只给错误提示用，最多 limit 字节）。
+     *
+     * 以前 textToHex / bitsToHex 都复用了带 24 字节上限的预览版，
+     * 于是「HEX 显示模式」和「复制 HEX」静默丢掉 24 字节之后的所有内容。
+     * 现在截断只留在这个专用方法里，公开 API 一律完整。
+     */
+    public static String previewHex(byte[] data, int limit) {
+        if (data == null || data.length == 0) return "";
+        int n = Math.min(data.length, Math.max(limit, 0));
+        StringBuilder sb = new StringBuilder(n * 3);
+        for (int i = 0; i < n; i++) {
+            if (i > 0) sb.append(' ');
+            sb.append(String.format("%02X", data[i] & 0xFF));
+        }
+        if (data.length > n) sb.append(" …");
+        return sb.toString();
+    }
+
+    /** 256 项字节→8 位二进制查表。比每次 Integer.toBinaryString + 补零循环快一截。 */
+    private static final String[] BYTE_BITS = new String[256];
+
+    static {
+        for (int i = 0; i < 256; i++) {
+            String b = Integer.toBinaryString(i);
+            StringBuilder sb = new StringBuilder(8);
+            for (int k = b.length(); k < 8; k++) sb.append('0');
+            BYTE_BITS[i] = sb.append(b).toString();
+        }
     }
 
     /** 文字 -> 二进制。compact=true 时去掉空格。 */
@@ -132,9 +256,7 @@ public final class BinCore {
         byte[] data = text.getBytes(UTF8);
         StringBuilder sb = new StringBuilder(data.length * 9);
         for (int i = 0; i < data.length; i++) {
-            String b = Integer.toBinaryString(data[i] & 0xFF);
-            for (int k = b.length(); k < 8; k++) sb.append('0');
-            sb.append(b);
+            sb.append(BYTE_BITS[data[i] & 0xFF]);
             if (!compact && i < data.length - 1) sb.append(' ');
         }
         return sb.toString();
@@ -143,13 +265,7 @@ public final class BinCore {
     /** 文字 -> 十六进制，便于核对。 */
     public static String textToHex(String text) {
         if (text == null || text.isEmpty()) return "";
-        byte[] data = text.getBytes(UTF8);
-        StringBuilder sb = new StringBuilder();
-        for (int i = 0; i < data.length; i++) {
-            if (i > 0) sb.append(' ');
-            sb.append(String.format("%02X", data[i] & 0xFF));
-        }
-        return sb.toString();
+        return textToHexBytes(text.getBytes(UTF8));
     }
 
     /** "N 字符 · M 字节" 描述。 */
@@ -165,9 +281,9 @@ public final class BinCore {
         return "unknown";
     }
 
-    /** 把长位串按 8 位分组，方便阅读。 */
+    /** 把长位串按 group 位分组，方便阅读。group <= 0 时直接返回原串，不再死循环。 */
     public static String groupBits(String bits, int group, String sep) {
-        if (bits == null || bits.isEmpty()) return "";
+        if (bits == null || bits.isEmpty() || group <= 0) return bits == null ? "" : bits;
         StringBuilder sb = new StringBuilder();
         for (int i = 0; i < bits.length(); i += group) {
             if (i > 0) sb.append(sep);
@@ -176,13 +292,39 @@ public final class BinCore {
         return sb.toString();
     }
 
-    /** 分页切片，供界面分段显示超大位串。 */
+    /** 分页切片，供界面分段显示超大位串。size <= 0 时返回整串单页。 */
     public static List<String> chunk(String s, int size) {
         List<String> out = new ArrayList<String>();
-        if (s == null) return out;
+        if (s == null || s.isEmpty()) return out;
+        if (size <= 0) {
+            out.add(s);
+            return out;
+        }
         for (int i = 0; i < s.length(); i += size) {
             out.add(s.substring(i, Math.min(i + size, s.length())));
         }
         return out;
+    }
+
+    /**
+     * 显示模式：把位串/文本按用户选的形式呈现。
+     * 这些方法以前都写好了却没人调用，界面上也就没有「分组/连写/十六进制」可选。
+     */
+    public static String renderBits(String bits, String mode) {
+        if (bits == null) return "";
+        if (mode == null) return groupBits(bits, 8, " ");
+        switch (mode) {
+            case "compact": return bits;
+            case "group4":  return groupBits(bits, 4, " ");
+            case "hex":     return bitsToHex(bits);
+            case "group8":
+            default:        return groupBits(bits, 8, " ");
+        }
+    }
+
+    /** 位串 -> 十六进制（不足 8 位补零后按字节输出）。 */
+    public static String bitsToHex(String bits) {
+        if (bits == null || bits.isEmpty()) return "";
+        return textToHexBytes(bitsToBytes(cleanBits(bits)));
     }
 }

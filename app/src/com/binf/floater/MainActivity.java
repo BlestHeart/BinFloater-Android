@@ -6,6 +6,7 @@ import android.content.Intent;
 import android.content.SharedPreferences;
 import android.graphics.Typeface;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
 import android.provider.Settings;
 import android.util.TypedValue;
@@ -47,11 +48,25 @@ public class MainActivity extends Activity {
         super.onCreate(savedInstanceState);
         prefs = getSharedPreferences("binf", Context.MODE_PRIVATE);
         setContentView(buildUi());
+        requestNotificationPermissionIfNeeded();
+    }
+
+    /** Android 13+ 不请求通知权限，前台服务的常驻通知就是隐形的。 */
+    private void requestNotificationPermissionIfNeeded() {
+        if (Build.VERSION.SDK_INT < 33) return;
+        try {
+            if (checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS)
+                    != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                requestPermissions(new String[]{android.Manifest.permission.POST_NOTIFICATIONS}, 1);
+            }
+        } catch (Exception ignored) {
+        }
     }
 
     @Override
     protected void onResume() {
         super.onResume();
+        syncEnabledPref();
         refreshStatus();
         // 从权限设置页回来时开关要跟着实际状态走。
         // 服务可能在我们看不见的时候被系统回收，或者被长按 ✕ 关掉——
@@ -60,8 +75,29 @@ public class MainActivity extends Activity {
         // 否则一次回填会顺带再 start/stop 一次服务。
         if (floatingSwitch != null) {
             syncingSwitch = true;
-            floatingSwitch.setChecked(prefs.getBoolean("floating_enabled", false));
+            floatingSwitch.setChecked(isFloatingOn());
             syncingSwitch = false;
+        }
+    }
+
+    /**
+     * 悬浮窗到底开没开：只信服务进程内的静态标志（它才是事实）。
+     *
+     * 以前是 `isRunning() || prefs.getBoolean("floating_enabled", false)`，
+     * 而 prefs 是陈旧的：重启手机 / `am force-stop` / 被系统回收时，
+     * onDestroy 不保证执行，prefs 还停在 true。于是主界面显示「✅ 运行中」，
+     * 桌面上却没有球，用户把开关拨向「开」还是空操作 —— 因为 setChecked 本来就是开的。
+     * 现在只信 isRunning()，并且 onResume 里把 prefs 对齐到实际状态。
+     */
+    private boolean isFloatingOn() {
+        return FloatingService.isRunning();
+    }
+
+    /** 把 prefs 里那份「应该开着」对齐到服务的真实状态，避免下次冷启动被陈旧值误导。 */
+    private void syncEnabledPref() {
+        boolean actual = FloatingService.isRunning();
+        if (prefs.getBoolean("floating_enabled", false) != actual) {
+            prefs.edit().putBoolean("floating_enabled", actual).apply();
         }
     }
 
@@ -131,7 +167,9 @@ public class MainActivity extends Activity {
                 + "2. 点桌面上的「01」小球，面板会自动读剪切板并转换\n"
                 + "3. 点「复制」把结果放回剪切板，粘到别处去\n\n"
                 + "面板上还有输入框，不想走剪切板就直接在里面打字。\n"
-                + "「⇄」切换转换方向，「✕」关掉悬浮窗。");
+                + "「⇄」切换转换方向，「8位/4位/连写/HEX」切换显示格式。\n"
+                + "「✕」收起面板（悬浮球还在），长按「✕」才彻底关闭悬浮窗。\n"
+                + "长按悬浮球也能弹出快捷菜单。");
         how.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
         how.setTextColor(TEXT);
         how.setLineSpacing(dp(5), 1f);
@@ -142,13 +180,30 @@ public class MainActivity extends Activity {
         LinearLayout aboutCard = makeCard();
         TextView about = new TextView(this);
         about.setText("编码：UTF-8\n"
-                + "解码：UTF-8 → GBK → Big5 → Latin-1 自动回退\n"
+                + "解码：UTF-8 → GBK / Big5（自动挑更像正文的）→ Latin-1 兜底\n"
                 + "支持格式：空格、逗号、分号、下划线、短横线、0b 前缀、完全连写\n"
-                + "判定阈值：去掉分隔符后至少 16 位，避免把 2024 之类误判");
+                + "判定阈值：去掉分隔符后至少 16 位；不超过 24 位时还必须同时含 0 和 1\n"
+                + "长度上限：单次最多 20000 位（约 2500 字节）");
         about.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
         about.setTextColor(MUTED);
         about.setLineSpacing(dp(3), 1f);
         aboutCard.addView(about);
+
+        // 版本 + 重置
+        addSectionTitle("版本");
+        LinearLayout verCard = makeCard();
+        TextView ver = new TextView(this);
+        ver.setText("v" + versionName() + " (" + versionCode() + ")");
+        ver.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+        ver.setTextColor(MUTED);
+        verCard.addView(ver);
+
+        Button reset = makeButton("重置所有设置", false);
+        reset.setOnClickListener(v -> resetSettings());
+        LinearLayout.LayoutParams rlp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(42));
+        rlp.topMargin = dp(12);
+        verCard.addView(reset, rlp);
 
         addSectionTitle("为什么不能自动监听剪切板");
         LinearLayout whyCard = makeCard();
@@ -232,14 +287,18 @@ public class MainActivity extends Activity {
         textBox.addView(d, dlp);
 
         floatingSwitch = new Switch(this);
-        floatingSwitch.setChecked(prefs.getBoolean("floating_enabled", false));
+        floatingSwitch.setChecked(isFloatingOn());
         floatingSwitch.setOnCheckedChangeListener((btn, checked) -> {
             if (syncingSwitch) return;
             if (checked) {
                 if (!canDrawOverlays()) {
                     toast("请先允许「显示在其他应用上层」");
-                    requestOverlayPermission();
+                    // 回滚时必须屏蔽监听器：直接 setChecked(false) 会再进一次
+                    // else 分支，白跑一次 stopService 并弹出「已关闭」的相反提示。
+                    syncingSwitch = true;
                     btn.setChecked(false);
+                    syncingSwitch = false;
+                    requestOverlayPermission();
                     return;
                 }
                 prefs.edit().putBoolean("floating_enabled", true).apply();
@@ -270,7 +329,12 @@ public class MainActivity extends Activity {
     private void startFloating() {
         try {
             startForegroundService(new Intent(this, FloatingService.class));
-            toast("悬浮窗已开启");
+            // 不再立刻报「已开启」：服务可能随后因权限/窗口错误自毁，
+            // 两条 toast 会互相打脸。状态交给 refreshStatus() 读事实。
+            toast("正在开启悬浮窗…");
+            if (floatingSwitch != null) {
+                floatingSwitch.postDelayed(this::refreshStatus, 300);
+            }
         } catch (Exception e) {
             toast("启动悬浮窗失败：" + e.getMessage());
         }
@@ -287,7 +351,8 @@ public class MainActivity extends Activity {
 
     private void refreshStatus() {
         boolean perm = canDrawOverlays();
-        boolean on = prefs.getBoolean("floating_enabled", false);
+        boolean on = isFloatingOn();
+        boolean fgOk = FloatingService.isForegroundOk();
 
         if (perm) {
             permView.setText("权限：已授予");
@@ -303,7 +368,11 @@ public class MainActivity extends Activity {
             statusView.setTextColor(WARN);
         } else if (on) {
             sb.append("✅ 悬浮窗运行中\n\n桌面上应该能看到「01」小球。点它打开面板。");
-            statusView.setTextColor(OK);
+            if (!fgOk) {
+                sb.append("\n\n⚠️ 前台服务通知没挂上，"
+                        + "系统可能会把它回收掉。请检查通知权限。");
+            }
+            statusView.setTextColor(fgOk ? OK : WARN);
         } else {
             sb.append("⚙️ 权限已就绪，但悬浮窗没开\n\n把下面的「启用悬浮窗」打开。");
             statusView.setTextColor(WARN);
@@ -313,6 +382,43 @@ public class MainActivity extends Activity {
 
     private int dp(int v) {
         return Math.round(v * getResources().getDisplayMetrics().density);
+    }
+
+    private String versionName() {
+        try {
+            return getPackageManager().getPackageInfo(getPackageName(), 0).versionName;
+        } catch (Exception e) {
+            return "?";
+        }
+    }
+
+    private long versionCode() {
+        try {
+            android.content.pm.PackageInfo pi =
+                    getPackageManager().getPackageInfo(getPackageName(), 0);
+            return Build.VERSION.SDK_INT >= 28 ? pi.getLongVersionCode() : pi.versionCode;
+        } catch (Exception e) {
+            return 0;
+        }
+    }
+
+    /** 清掉所有偏好并重启服务，让用户能把调乱的设置恢复默认。 */
+    private void resetSettings() {
+        try {
+            prefs.edit().clear().apply();
+        } catch (Exception ignored) {
+        }
+        try {
+            stopService(new Intent(this, FloatingService.class));
+        } catch (Exception ignored) {
+        }
+        if (floatingSwitch != null) {
+            syncingSwitch = true;
+            floatingSwitch.setChecked(false);
+            syncingSwitch = false;
+        }
+        refreshStatus();
+        toast("已恢复默认设置");
     }
 
     private void toast(String msg) {

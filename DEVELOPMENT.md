@@ -60,12 +60,12 @@ d8 --min-api 34 --output build/dex build/classes/**/*.class
 bash run_tests.sh
 ```
 
-两组共累计 89 项：
+两组共累计 129 项：
 
 | 组 | 项数 | 测什么 |
 |---|---|---|
-| 编解码核心 | 37 | `BinCore` 的双向转换、分隔符、编码回退、阈值判定 |
-| 静态审查 | 52 | 读源码做约束检查（见下） |
+| 编解码核心 | 53 | `BinCore` 的双向转换、分隔符、编码回退、阈值判定、长度上限与 hex 不截断 |
+| 静态审查 | 76 | 读源码做约束检查（见下） |
 
 ### 为什么有「静态审查」这一组
 
@@ -172,7 +172,7 @@ onDestroy() → setEnabledPref(false)
 回填开关时有个副作用要防：`setChecked()` 会触发 `OnCheckedChangeListener`，不屏蔽的话
 一次「同步状态」会顺带再 start/stop 一次服务。用 `syncingSwitch` 标志位挡住。
 
-静态审查加 5 项守着（47 → 52）。
+静态审查加 29 项守着（47 → 76，含本轮修掉的 17 个 bug 的回归断言）。
 
 ### 方向自动识别
 
@@ -232,8 +232,8 @@ app/
     FloatingService.java       悬浮球 + 面板
     MainActivity.java          设置界面
 tools/
-  CoreTest.java                37 项编解码测试
-  StaticAudit.java             52 项源码约束检查
+  CoreTest.java                53 项编解码测试
+  StaticAudit.java             76 项源码约束检查
   push_github.sh               推送脚本
 signing/
   README.md                    密钥说明（密钥本身不进 git）
@@ -350,7 +350,8 @@ v2.0 的改动：
 
 ## 后续可做
 
-- **面板宽度自适应**：现在写死 292dp，可以按屏幕宽度算 `min(292, screenWidth * 0.8)`
 - **历史记录**：记最近 N 次转换结果
-- **多编码手动切换**：现在自动回退，可以给个下拉让用户指定
+- **多编码手动切换**：现在自动回退，可以给个下拉让用户指定（目前只能靠回退顺序碰运气）
 - **粘贴即转**：面板打开后监听输入框的 paste 事件
+- **悬浮球样式**：现在只有 `01` / `BIN` 两行字，可以做透明度 / 尺寸档位
+- **批量文件**：把剪切板里的整段 hex dump 批量转成文件（要写存储权限，暂不做）

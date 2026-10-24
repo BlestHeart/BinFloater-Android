@@ -27,16 +27,23 @@ public class StaticAudit {
         String base = "app/src/com/binf/floater/";
         String main = read(base + "MainActivity.java");
         String flo = read(base + "FloatingService.java");
+        String bin = read(base + "BinCore.java");
         String manifest = read("app/AndroidManifest.xml");
+        // 反向断言一律对去注释后的代码做，否则会命中「以前写的是…」这类注释
+        String mainCode = stripComments(main);
+        String floCode = stripComments(flo);
+        String binCode = stripComments(bin);
 
         System.out.println("=== A. 悬浮窗关键点 ===");
         check("用 TYPE_APPLICATION_OVERLAY", flo.contains("TYPE_APPLICATION_OVERLAY"), "");
         check("气泡设 NOT_FOCUSABLE", flo.contains("FLAG_NOT_FOCUSABLE"), "");
         // 面板必须可获焦，否则 Android 10+ 读不到剪切板。
-        // 全文只应出现一次 FLAG_NOT_FOCUSABLE（给气泡用），面板绝不能加。
+        // 气泡和长按菜单都要 NOT_FOCUSABLE（它们不收键盘输入），但**面板那一块**绝不能加。
+        // 所以这里按「panelLp = new WindowManager.LayoutParams(...)」整段取出来单独查，
+        // 而不是数全文出现几次 —— 数次数会把合法的菜单也算进去，误报。
         check("面板不设 NOT_FOCUSABLE（要能读剪切板）",
-                countOccurrences(stripComments(flo), "FLAG_NOT_FOCUSABLE") == 1,
-                "只应气泡用一次");
+                !layoutBlock(flo, "panelLp").contains("FLAG_NOT_FOCUSABLE"),
+                "panelLp 里出现了 FLAG_NOT_FOCUSABLE，面板会读不到剪切板");
         check("addView 有 try-catch", flo.contains("wm.addView"), "");
         check("removeView 有保护", flo.contains("wm.removeView"), "");
         check("前台服务通知已创建", flo.contains("startForeground"), "");
@@ -52,7 +59,6 @@ public class StaticAudit {
         check("✕ 有无障碍描述", flo.contains("setContentDescription(\"收起面板\")"), "");
         // 长按 ✕ 走 stopSelf()，不经过主界面开关回调。服务死了开关必须回落，
         // 否则主界面一直显示「运行中」，桌面上却没有小球。
-        String floCode = stripComments(flo);
         int destroyAt = floCode.indexOf("public void onDestroy()");
         String destroyBody = destroyAt < 0 ? "" : floCode.substring(destroyAt);
         check("onDestroy 把开关回落成关", destroyBody.contains("setEnabledPref(false)"), "");
@@ -103,7 +109,7 @@ public class StaticAudit {
         check("支持文字→二进制", flo.contains("textToBinary"), "");
         check("支持二进制→文字", flo.contains("binaryToText"), "");
         check("有方向切换", flo.contains("textToBin = !textToBin"), "");
-        check("自动识别方向", flo.contains("looksLikeBinary"), "");
+        check("自动识别方向", flo.contains("BinCore.autoDetect"), "");
         check("有复制按钮", flo.contains("copyOutput"), "");
         check("有清空按钮", flo.contains("清空"), "");
         check("有紧凑模式变量", flo.contains("compact"), "");
@@ -113,6 +119,74 @@ public class StaticAudit {
         check("MainActivity 无拼音设置", !main.contains("layout_mode"), "");
         check("MainActivity 无云端设置", !main.contains("cloud_on"), "");
         check("FloatingService 无拼音引用", !flo.contains("PinyinEngine"), "");
+
+        System.out.println("=== H. 本轮修复的回归守卫 ===");
+        // 1) 长按球只能有一条路径。setOnLongClickListener 会在 ~400ms 就
+        //    performLongClick，自定义 runnable 在 450ms 再来一次，两次 showMenu()
+        //    相撞把菜单关掉 —— 菜单闪一下就消失。
+        check("长按球不挂 setOnLongClickListener（只留自定义 runnable）",
+                !floCode.contains("bubble.setOnLongClickListener"),
+                "bubble 上又挂了 setOnLongClickListener，会和 postDelayed(longPress) 双触发");
+        check("长按仍由自定义 runnable 触发",
+                floCode.contains("handler.postDelayed(longPress, LONG_PRESS_MS)"), "");
+        // 2) showPanel 必须幂等，否则面板已开时通知栏「打开面板」会重复 addView。
+        String showPanelBody = methodBody(floCode, "private void showPanel()");
+        check("showPanel 开头有 panelVisible 守卫", showPanelBody.contains("if (panelVisible)"), "");
+        // 3) hidePanel 不能清掉全部 handler 消息，否则重开面板输出框停在旧值。
+        String hidePanelBody = methodBody(floCode, "private void hidePanel()");
+        check("hidePanel 不清全部 handler 消息",
+                !hidePanelBody.contains("removeCallbacksAndMessages(null)"),
+                "又清成 null 了，refreshRunnable 会被一起清掉");
+        check("hidePanel 只清 refreshRunnable",
+                hidePanelBody.contains("removeCallbacks(refreshRunnable)"), "");
+        // 4) 复制不能弹两条 toast：截断后长度正好等于上限，旧写法两条都成立。
+        String copyBody = methodBody(floCode, "private void copyOutput()");
+        check("复制用截断前标记判断 toast", copyBody.contains("boolean truncated"), "");
+        check("复制不再用长度比较决定提示",
+                !copyBody.contains("if (s.length() <= MAX_COPY_CHARS) toast"), "");
+        // 5) 文字→二进制方向必须有长度上限，否则粘长文卡死主线程。
+        check("文字→二进制有长度上限", floCode.contains("bitsLen > BinCore.MAX_BITS"), "");
+        // 6) addView 失败要把 bubble 置回 null，否则幂等守卫挡住重试。
+        String createBubbleBody = methodBody(floCode, "private void createBubble()");
+        check("addView 失败回滚 bubble 字段", createBubbleBody.contains("bubble = null;"), "");
+        // 7) startForeground 失败必须自杀，不然系统判 ANR。
+        String fgBody = methodBody(floCode, "private void startForegroundSafe()");
+        check("startForeground 失败后 stopSelf", fgBody.contains("stopSelf()"), "");
+        // 8) 主界面只信 isRunning()，不能拿陈旧 prefs 冒充「运行中」。
+        String isOnBody = methodBody(mainCode, "private boolean isFloatingOn()");
+        check("isFloatingOn 只信 isRunning()",
+                !isOnBody.contains("prefs.getBoolean(\"floating_enabled\"")
+                        && isOnBody.contains("FloatingService.isRunning()"),
+                "又退回用 prefs 判断了，重启后会显示「运行中」但桌面没球");
+        check("onResume 对齐 prefs", mainCode.contains("syncEnabledPref()"), "");
+        // 9) 服务要覆写 onConfigurationChanged 自己重算位置。
+        //    注意 <service> 没有 android:configChanges 这个属性（那是 activity 的），
+        //    服务的 onConfigurationChanged 由系统直接调，不需要清单声明。
+        check("service 覆写 onConfigurationChanged",
+                floCode.contains("public void onConfigurationChanged(Configuration"), "");
+        String cfgBody = methodBody(floCode, "public void onConfigurationChanged(Configuration");
+        check("转屏后重算球位置", cfgBody.contains("clampBubble"), "");
+        check("转屏后重算面板位置", cfgBody.contains("syncPanelPos"), "");
+        // 10) BinCore 的长度上限必须两边口径一致（都先 cleanBits 再比）。
+        check("looksLikeBinary 先 cleanBits 再比长度",
+                binCode.contains("String bits = cleanBits(raw);")
+                        && !binCode.contains("raw.length() > MAX_BITS"),
+                "又用含分隔符的 raw.length() 比上限了，判定和解码会不一致");
+        // 11) HEX 公开 API 不能复用带预览上限的实现。
+        check("textToHex 走完整实现",
+                binCode.contains("public static String textToHex(String text)"),
+                "");
+        check("bitsToHex 走完整实现",
+                binCode.contains("public static String bitsToHex(String bits)"), "");
+        check("textToHexBytes 不再截断", !binCode.contains("Math.min(data.length, 24)"), "");
+        check("previewHex 只给错误提示用", binCode.contains("previewHex(data, 24)"), "");
+        // 12) 分享不能把超大内容塞进 extras。
+        check("分享有长度上限", floCode.contains("MAX_SHARE_CHARS"), "");
+        // 13) 截断显示要防代理对。
+        check("截断显示防代理对", floCode.contains("Character.isHighSurrogate"), "");
+        // 14) 键盘遮挡：面板要监听 ime insets。
+        check("面板监听 ime insets", flo.contains("Type.ime()"), "");
+        check("面板位置扣掉键盘高度", flo.contains("imeBottom"), "");
 
         System.out.println();
         System.out.println("审查项：" + checked + "  问题：" + problems);
@@ -125,14 +199,50 @@ public class StaticAudit {
         return c;
     }
 
+    /**
+     * 从「lpName = new WindowManager.LayoutParams(」开始截到该语句结束的 ");"，
+     * 拿到这一整块布局参数文本。用来单查某个窗口有没有加某个 flag，
+     * 避免全文计数把别的窗口（气泡/菜单）算进来。
+     */
+    static String layoutBlock(String src, String lpName) {
+        String marker = lpName + " = new WindowManager.LayoutParams(";
+        int start = src.indexOf(marker);
+        if (start < 0) return "";
+        int end = src.indexOf(");", start);
+        if (end < 0) end = Math.min(src.length(), start + 600);
+        return src.substring(start, Math.min(src.length(), end + 2));
+    }
+
     /** 去掉 // 注释行，避免注释里提到关键字影响计数。 */
     static String stripComments(String src) {
+        // 先把块注释 /* ... */ 整段抹掉，再逐行去 //。
+        // 只去 // 是不够的：代码里大量注释在讲「以前这里写的是 xxx」，
+        // 反向断言（!contains）会命中注释里那串历史代码，把已经修好的东西判成没修。
+        String noBlock = src.replaceAll("(?s)/\\*.*?\\*/", "");
         StringBuilder sb = new StringBuilder();
-        for (String line : src.split("\n")) {
+        for (String line : noBlock.split("\n")) {
             int idx = line.indexOf("//");
             sb.append(idx >= 0 ? line.substring(0, idx) : line).append('\n');
         }
         return sb.toString();
+    }
+
+    /** 取某个方法（含签名）之后的一整段代码，括号配平为止。找不到返回空串。 */
+    static String methodBody(String code, String signature) {
+        int at = code.indexOf(signature);
+        if (at < 0) return "";
+        int open = code.indexOf('{', at);
+        if (open < 0) return "";
+        int depth = 0;
+        for (int i = open; i < code.length(); i++) {
+            char c = code.charAt(i);
+            if (c == '{') depth++;
+            else if (c == '}') {
+                depth--;
+                if (depth == 0) return code.substring(at, i + 1);
+            }
+        }
+        return code.substring(at);
     }
 
     static String read(String path) throws Exception {
