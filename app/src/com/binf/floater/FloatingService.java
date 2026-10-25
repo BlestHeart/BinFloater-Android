@@ -897,6 +897,12 @@ public class FloatingService extends Service {
         if (panel != null && panelVisible) {
             if (themeChanged) recolorPanel();
             else rebuildHistoryBar();
+        } else if (themeChanged) {
+            // 面板收着的时候换了主题：panel 这个 View 树还缓存着旧配色
+            // （hidePanel 只 removeView，不置 null），showPanel 会直接复用它，
+            // 于是「主界面已经是浅色，点开面板还是黑的」。
+            // 丢掉缓存，下次 showPanel 会 buildPanel() 重建。
+            panel = null;
         }
         hideMenu();
     }
