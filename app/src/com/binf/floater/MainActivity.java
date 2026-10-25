@@ -313,7 +313,7 @@ public class MainActivity extends Activity {
             btn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
             btn.setGravity(Gravity.CENTER);
             btn.setTextColor(on ? pal.text : pal.muted);
-            btn.setBackgroundColor(on ? pal.cardHi : pal.card);
+            btn.setBackground(pal.pressedBg(on ? pal.cardHi : pal.card));
             btn.setOnClickListener(v -> applyTheme(mode));
             LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
                     0, ViewGroup.LayoutParams.MATCH_PARENT, 1f);
@@ -514,8 +514,9 @@ public class MainActivity extends Activity {
         tv.setText(label);
         tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11);
         tv.setTextColor(pal.text);
-        tv.setBackgroundColor(pal.cardHi);
+        tv.setBackground(pal.pressedBg(pal.cardHi));
         tv.setGravity(Gravity.CENTER);
+        tv.setClickable(true);
         return tv;
     }
 
@@ -525,7 +526,8 @@ public class MainActivity extends Activity {
         b.setAllCaps(false);
         b.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
         b.setTextColor(primary ? (pal == Palette.DARK ? 0xFFCFE0FF : pal.text) : pal.muted);
-        b.setBackgroundColor(primary ? (pal == Palette.DARK ? 0xFF2B3A5E : pal.accent) : pal.cardHi);
+        int normal = primary ? (pal == Palette.DARK ? 0xFF2B3A5E : pal.accent) : pal.cardHi;
+        b.setBackground(pal.pressedBg(normal));
         if (primary && pal != Palette.DARK) b.setTextColor(0xFFFFFFFF);
         return b;
     }

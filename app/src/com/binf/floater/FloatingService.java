@@ -132,6 +132,10 @@ public class FloatingService extends Service {
     private TextView status;
     private TextView dirLabel;
     private TextView modeBtn;
+    /** 方向按钮：自动 / 文字→编码 / 编码→文字。 */
+    private TextView dirBtn;
+    /** 编码按钮：BIN / B64。 */
+    private TextView codecBtn;
     /** 历史条目的横向容器。 */
     private LinearLayout historyRow;
     private HorizontalScrollView historyBar;
@@ -141,9 +145,17 @@ public class FloatingService extends Service {
     /** 当前配色（深/浅）。 */
     private Palette pal;
 
+    /**
+     * 方向自动识别。开着时由输入内容决定往哪个方向转 —— 不只是剪切板，
+     * 手打的内容也一样，所以判定放在 refresh() 里，不放在 readClip() 里。
+     */
+    private boolean autoDir = true;
+    /** false = 文字→编码，true = 编码→文字。autoDir 时是「上一次判定的结果」。 */
+    private boolean decodeDir = false;
+    /** false = 二进制，true = Base64。既是编码目标，也是解码格式。 */
+    private boolean codecB64 = false;
+    /** 由上面三个布尔派生出来的方向字符串，refresh/历史/文案都用它。 */
     private String dir = DIR_TEXT2BIN;
-    /** 用户手动切过方向之后，自动识别就不再改方向。 */
-    private boolean dirPinnedByUser = false;
     /** group8 / group4 / compact / hex。 */
     private String renderMode = "group8";
     /** 未截断的完整输出，「复制」用它。 */
@@ -764,10 +776,9 @@ public class FloatingService extends Service {
             panelVisible = false;
             autoReadPending = false;
             imeBottom = 0;
-            // 收起面板就结束「这一轮」：用户手动按过的方向只对本次有效，
-            // 下次打开重新自动识别。否则点过一次 ⇄ 或历史胶囊之后，
-            // 自动识别在整个服务生命周期里都失效，新复制的二进制会被按文字转。
-            dirPinnedByUser = false;
+            // 收起面板不再强制复位方向：现在方向是标题栏上一个显式三态按钮，
+            // 用户选了「文→码」就该一直保持。以前复位 dirPinnedByUser 是因为
+            // 自动识别没有 UI，怕它永久失效；现在有「自动」这一档，不需要兜底了。
             // 只清「还没执行的防抖刷新」，不能清全部消息。
             // 以前用 removeCallbacksAndMessages(null)，把 refreshRunnable 一起清了，
             // 而重开面板时 panel != null 又不会再 buildPanel/refresh，
@@ -783,6 +794,8 @@ public class FloatingService extends Service {
         tv.setText(label);
         tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
         tv.setTextColor(pal.text);
+        // 菜单底色就是 cardHi，条目常态与底色同色，只有按下时浮出来。
+        tv.setBackground(pal.pressedBg(pal.cardHi));
         tv.setPadding(dp(14), dp(9), dp(14), dp(9));
         tv.setOnClickListener(l);
         return tv;
@@ -794,9 +807,12 @@ public class FloatingService extends Service {
         LinearLayout m = new LinearLayout(this);
         m.setOrientation(LinearLayout.VERTICAL);
         m.setBackgroundColor(pal.cardHi);
-        m.addView(menuBtn("⇄  切换方向（" + dirLabelText() + "）", v -> {
+        m.addView(menuBtn("⇄  方向：" + dirLabelText(), v -> {
             cycleDir();
-            dirPinnedByUser = true;
+            hideMenu();
+        }));
+        m.addView(menuBtn("▤  编码：" + (shownCodecB64() ? "Base64" : "二进制"), v -> {
+            toggleCodec();
             hideMenu();
         }));
         m.addView(menuBtn("📋  读剪切板", v -> { hideMenu(); readClip(false); }));
@@ -1034,7 +1050,7 @@ public class FloatingService extends Service {
             if (text.length() >= MAX_HISTORY_CHARS) chip.setText(chip.getText() + "…");
             chip.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10);
             chip.setTextColor(pal.accent);
-            chip.setBackgroundColor(pal.cardHi);
+            chip.setBackground(pal.pressedBg(pal.cardHi));
             chip.setPadding(dp(8), dp(4), dp(8), dp(4));
             LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
@@ -1043,7 +1059,9 @@ public class FloatingService extends Service {
             chip.setOnClickListener(v -> {
                 if (input == null) return;
                 dir = d;
-                dirPinnedByUser = true;
+                // 点历史条目等于「我就要按这条的方向转」，退出自动识别。
+                autoDir = false;
+                syncFlagsFromDir();
                 input.setText(text);
                 updateDir();
                 flushRefresh();
@@ -1097,22 +1115,24 @@ public class FloatingService extends Service {
         head.addView(title, new LinearLayout.LayoutParams(0,
                 ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
-        // 显示模式：8位一组 / 4位一组 / 连写 / 十六进制
-        modeBtn = smallBtn("8位");
-        modeBtn.setContentDescription("切换显示模式");
-        modeBtn.setOnClickListener(v -> cycleRenderMode());
-        head.addView(modeBtn);
-
-        TextView swap = smallBtn("⇄");
-        swap.setContentDescription("切换转换方向");
-        swap.setOnClickListener(v -> {
-            cycleDir();
-            dirPinnedByUser = true;
-        });
-        LinearLayout.LayoutParams slp = new LinearLayout.LayoutParams(
+        // 方向：自动 → 文字→编码 → 编码→文字 → 自动。
+        // 自动识别挂在这个按钮上：点一下就退出自动、再点翻成反向、第三下回到自动。
+        dirBtn = smallBtn("自动");
+        dirBtn.setContentDescription("切换转换方向");
+        dirBtn.setOnClickListener(v -> cycleDir());
+        LinearLayout.LayoutParams dlp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        slp.leftMargin = dp(6);
-        head.addView(swap, slp);
+        dlp.leftMargin = dp(6);
+        head.addView(dirBtn, dlp);
+
+        // 编码格式：二进制 / Base64。自动识别模式下它只改「编码目标」。
+        codecBtn = smallBtn("BIN");
+        codecBtn.setContentDescription("切换二进制与 Base64");
+        codecBtn.setOnClickListener(v -> toggleCodec());
+        LinearLayout.LayoutParams blp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        blp.leftMargin = dp(6);
+        head.addView(codecBtn, blp);
 
         // ✕ 只收起面板，悬浮球留着。
         // 以前这里是 hidePanel() + stopSelf()，一点整个前台服务就停了，
@@ -1137,12 +1157,29 @@ public class FloatingService extends Service {
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
         setupPanelDrag(head);
 
-        // 方向说明
+        // 方向说明 + 显示格式按钮。
+        // 格式按钮从标题栏挪到这里：标题栏现在要放「方向」「BIN/B64」「✕」三个按钮，
+        // 再加一个在 292dp 宽的面板上会把标题挤没。放这一行右边正好，也不影响拖动
+        // ——拖动把手只有上面那一条标题栏。
+        LinearLayout dirRow = new LinearLayout(this);
+        dirRow.setOrientation(LinearLayout.HORIZONTAL);
+        dirRow.setGravity(Gravity.CENTER_VERTICAL);
+        dirRow.setPadding(0, dp(6), 0, dp(2));
+
         dirLabel = new TextView(this);
         dirLabel.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11);
         dirLabel.setTextColor(pal.teal);
-        dirLabel.setPadding(0, dp(6), 0, dp(2));
-        root.addView(dirLabel);
+        dirRow.addView(dirLabel, new LinearLayout.LayoutParams(0,
+                ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
+        // 显示模式：8位一组 / 4位一组 / 连写 / 十六进制 / Base64
+        modeBtn = smallBtn("8位");
+        modeBtn.setContentDescription("切换显示模式");
+        modeBtn.setOnClickListener(v -> cycleRenderMode());
+        dirRow.addView(modeBtn);
+
+        root.addView(dirRow, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
         // 输入
         input = new EditText(this);
@@ -1239,8 +1276,9 @@ public class FloatingService extends Service {
         tv.setText(label);
         tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
         tv.setTextColor(pal.muted);
-        tv.setBackgroundColor(pal.cardHi);
+        tv.setBackground(pal.pressedBg(pal.cardHi));
         tv.setPadding(dp(9), dp(4), dp(9), dp(4));
+        tv.setClickable(true);
         return tv;
     }
 
@@ -1249,7 +1287,7 @@ public class FloatingService extends Service {
         tv.setText(label);
         tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
         tv.setTextColor(pal.text);
-        tv.setBackgroundColor(pal.cardHi);
+        tv.setBackground(pal.pressedBg(pal.cardHi));
         tv.setGravity(Gravity.CENTER);
         tv.setContentDescription(label);
         tv.setOnClickListener(l);
@@ -1315,25 +1353,109 @@ public class FloatingService extends Service {
         }
     }
 
-    /** 方向循环：文字→二进制 → 二进制→文字 → 文字→Base64 → Base64→文字。 */
+    /** 方向循环：自动 → 文字→编码 → 编码→文字 → 自动。 */
     private void cycleDir() {
-        switch (dir) {
-            case DIR_TEXT2BIN: dir = DIR_BIN2TEXT; break;
-            case DIR_BIN2TEXT: dir = DIR_TEXT2B64; break;
-            case DIR_TEXT2B64: dir = DIR_B64TEXT; break;
-            default:           dir = DIR_TEXT2BIN; break;
+        if (autoDir) {
+            // 从自动切出来时，先接住「当前屏幕上生效的编码格式」，再翻成正向。
+            // 不接的话，自动识别解的是 Base64、按钮写着 B64，一点却跳成 BIN。
+            codecB64 = shownCodecB64();
+            autoDir = false;
+            decodeDir = false;
+        } else if (!decodeDir) {
+            decodeDir = true;
+        } else {
+            autoDir = true;
+        }
+        syncDirFromFlags();
+        updateDir();
+        flushRefresh();
+    }
+
+    /**
+     * 编码循环：二进制 ↔ Base64。
+     *
+     * 分两种情况，因为「按钮按下去必须立刻看到变化」，否则就是死键：
+     * - 自动识别判定成解码时，点它等于「不对，是另一种格式」，退出自动、按相反格式重解；
+     * - 其它情况只改「编码目标」，反向由方向按钮/自动识别决定。
+     */
+    private void toggleCodec() {
+        if (autoDir && decodeDir) {
+            boolean curIsB64 = DIR_B64TEXT.equals(dir);
+            autoDir = false;
+            decodeDir = true;
+            codecB64 = !curIsB64;
+            // 退出自动之后 dir 就没人重算了，必须自己同步一次。
+            // 漏掉这行会出现「按钮点了、格式没换」—— 因为 refresh 读的仍是旧 dir。
+            syncDirFromFlags();
+        } else {
+            codecB64 = !codecB64;
+            if (!autoDir) syncDirFromFlags();
         }
         updateDir();
         flushRefresh();
     }
 
-    private String dirLabelText() {
-        switch (dir) {
-            case DIR_BIN2TEXT: return "二进制 → 文字";
-            case DIR_TEXT2B64: return "文字 → Base64";
-            case DIR_B64TEXT: return "Base64 → 文字";
-            default:           return "文字 → 二进制";
+    /**
+     * 按钮上该显示哪种编码。
+     *
+     * 不能只看 codecB64：自动识别判定成解码时，实际生效的是 dir 里的格式，
+     * 此时若还按 codecB64 显示，就会出现「界面写着 BIN、解的是 Base64」。
+     */
+    private boolean shownCodecB64() {
+        return DIR_TEXT2B64.equals(dir) || DIR_B64TEXT.equals(dir);
+    }
+
+    /** 把三个布尔合成 dir。autoDir 时不动 dir —— 它由 applyAutoDir 决定。 */
+    private void syncDirFromFlags() {
+        if (autoDir) return;
+        if (decodeDir) dir = codecB64 ? DIR_B64TEXT : DIR_BIN2TEXT;
+        else           dir = codecB64 ? DIR_TEXT2B64 : DIR_TEXT2BIN;
+    }
+
+    /** 从 dir 反推三个布尔（历史条目点了、自动识别解出方向之后用）。 */
+    private void syncFlagsFromDir() {
+        decodeDir = DIR_BIN2TEXT.equals(dir) || DIR_B64TEXT.equals(dir);
+        if (!autoDir) codecB64 = DIR_TEXT2B64.equals(dir) || DIR_B64TEXT.equals(dir);
+    }
+
+    /**
+     * 自动识别：只决定「正向还是反向」，以及反向时按哪种格式解码；
+     * 正向的目标（二进制 / Base64）始终由 codecB64 决定 —— 用户手动选的
+     * 编码格式不该因为输入了一段 0/1 就被悄悄改掉。
+     */
+    private void applyAutoDir(String in) {
+        if (in == null || in.isEmpty()) {
+            decodeDir = false;
+            dir = codecB64 ? DIR_TEXT2B64 : DIR_TEXT2BIN;
+            return;
         }
+        if (in.length() > MAX_AUTODETECT_CHARS) {
+            decodeDir = false;
+            dir = codecB64 ? DIR_TEXT2B64 : DIR_TEXT2BIN;
+            return;
+        }
+        String auto = BinCore.autoDetect(in);
+        if ("bin2text".equals(auto)) {
+            decodeDir = true;
+            dir = DIR_BIN2TEXT;
+        } else if ("b64text".equals(auto)) {
+            decodeDir = true;
+            dir = DIR_B64TEXT;
+        } else {
+            decodeDir = false;
+            dir = codecB64 ? DIR_TEXT2B64 : DIR_TEXT2BIN;
+        }
+    }
+
+    private String dirLabelText() {
+        String base;
+        switch (dir) {
+            case DIR_BIN2TEXT: base = "二进制 → 文字"; break;
+            case DIR_TEXT2B64: base = "文字 → Base64"; break;
+            case DIR_B64TEXT:  base = "Base64 → 文字"; break;
+            default:           base = "文字 → 二进制"; break;
+        }
+        return autoDir ? "自动识别：" + base : base;
     }
 
     private String dirShortLabel(String d) {
@@ -1353,6 +1475,15 @@ public class FloatingService extends Service {
     private void updateDir() {
         if (dirLabel == null) return;
         dirLabel.setText(dirLabelText());
+        if (dirBtn != null) {
+            dirBtn.setText(autoDir ? "自动" : (decodeDir ? "码→文" : "文→码"));
+            dirBtn.setContentDescription(autoDir ? "方向：自动识别" : dirLabelText());
+        }
+        if (codecBtn != null) {
+            boolean b64 = shownCodecB64();
+            codecBtn.setText(b64 ? "B64" : "BIN");
+            codecBtn.setContentDescription(b64 ? "编码：Base64" : "编码：二进制");
+        }
         if (modeBtn != null) {
             modeBtn.setText(modeLabel());
             // 其它三个方向用不上显示格式，淡掉免得用户以为点了没反应。
@@ -1377,6 +1508,13 @@ public class FloatingService extends Service {
     private void refresh() {
         if (input == null || output == null || status == null) return;
         String in = input.getText().toString();
+        // 自动识别放在这里而不是 readClip()：手打的内容也要能识别方向，
+        // 否则「粘贴 0/1 能译、手打 0/1 还是当成文字去编码」。
+        if (autoDir) {
+            String before = dir;
+            applyAutoDir(in);
+            if (!before.equals(dir)) updateDir();
+        }
         if (in.isEmpty()) {
             fullOutput = "";
             output.setText("");
@@ -1568,19 +1706,8 @@ public class FloatingService extends Service {
                 text = safeSubstring(text, MAX_CLIP_CHARS);
                 truncated = true;
             }
-            // 自动判断方向，但用户手动按过 ⇄ 之后以用户为准。
-            // 判断本身要跑正则和 Base64 试探解码，超长文本直接按文字处理，
-            // 免得在主线程上白算。
-            if (!dirPinnedByUser) {
-                if (text.length() <= MAX_AUTODETECT_CHARS) {
-                    String auto = BinCore.autoDetect(text);
-                    if ("bin2text".equals(auto)) dir = DIR_BIN2TEXT;
-                    else if ("b64text".equals(auto)) dir = DIR_B64TEXT;
-                    else if ("text2bin".equals(auto)) dir = DIR_TEXT2BIN;
-                } else {
-                    dir = DIR_TEXT2BIN;
-                }
-            }
+            // 方向判定挪到 refresh() 里了（自动识别要对手打内容也生效）。
+            // 这里只负责塞内容和刷新。
             input.setText(text);
             updateDir();
             flushRefresh();

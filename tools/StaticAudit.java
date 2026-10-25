@@ -110,9 +110,14 @@ public class StaticAudit {
         System.out.println("=== F. 双向转换完整性 ===");
         check("支持文字→二进制", flo.contains("textToBinary"), "");
         check("支持二进制→文字", flo.contains("binaryToText"), "");
-        // 方向从「两向布尔」扩成四向之后，切换逻辑改成 switch (dir) 轮转。
-        check("有方向切换", flo.contains("case DIR_BIN2TEXT: dir = DIR_TEXT2B64; break;"), "");
+        // 方向现在是「自动 / 文→码 / 码→文」三态按钮，编码格式单独一个 BIN/B64
+        // 按钮，两个布尔 + 派生出来的 dir。老的四向轮转已经拆掉了。
+        check("有方向三态切换", flo.contains("autoDir = true;") && flo.contains("decodeDir = true;"), "");
+        check("有编码格式切换", flo.contains("codecB64 = !codecB64;"), "");
         check("自动识别方向", flo.contains("BinCore.autoDetect"), "");
+        check("自动识别在 refresh 里（手打也生效）",
+                methodBody(floCode, "private void refresh()").contains("applyAutoDir(in)"),
+                "自动识别只挂在 readClip 上，手打 0/1 不会被识别");
         check("有复制按钮", flo.contains("copyOutput"), "");
         check("有清空按钮", flo.contains("清空"), "");
         check("有紧凑模式变量", flo.contains("compact"), "");
@@ -236,6 +241,38 @@ public class StaticAudit {
         //     而 smallBtn 的背景正好也是 pal.cardHi —— 「8位」按钮整块空白。
         check("文字颜色不等于自身背景色", !floCode.contains("setTextColor(pal.cardHi)"), "");
         check("不可用按钮用 alpha 淡出", floCode.contains("modeBtn.setAlpha("), "");
+
+        System.out.println("=== J. 按钮按下反馈 ===");
+        // 22) 所有按钮都要有按下态。以前全是 setBackgroundColor(单色)，TextView
+        //     没有按下反馈，点下去屏幕一动不动，用户不知道点到没有。
+        check("Palette 提供按下态背景", palCode.contains("pressedBg("), "");
+        check("按下色由色板算（不写死）", palCode.contains("0.16f"), "");
+        check("悬浮窗小按钮有按下态",
+                methodBody(floCode, "private TextView smallBtn(String label)").contains("pressedBg("),
+                "smallBtn 又改回 setBackgroundColor 了");
+        check("操作按钮有按下态",
+                methodBody(floCode, "private TextView actionBtn(String label, View.OnClickListener l)")
+                        .contains("pressedBg("), "");
+        check("菜单条目有按下态", floCode.contains("pressedBg(pal.cardHi)"), "");
+        check("主界面按钮有按下态", mainCode.contains("pressedBg("), "");
+        // 23) 标题栏必须有方向和编码两个按钮，且格式按钮让位到第二行。
+        check("标题栏有方向按钮", floCode.contains("dirBtn = smallBtn("), "");
+        check("标题栏有编码按钮", floCode.contains("codecBtn = smallBtn("), "");
+        check("格式按钮挪到第二行", floCode.contains("dirRow.addView(modeBtn)"), "");
+        // 24) 退出自动识别时 dir 必须自己同步。漏了就是「按钮点了没反应」：
+        //     refresh() 读的是 dir，只改布尔不改 dir，界面就停在旧格式上。
+        check("toggleCodec 退出自动后同步 dir",
+                methodBody(floCode, "private void toggleCodec()").contains("syncDirFromFlags()"),
+                "toggleCodec 退出自动识别后没同步 dir，点了不生效");
+        check("cycleDir 退出自动后同步 dir",
+                methodBody(floCode, "private void cycleDir()").contains("syncDirFromFlags()"), "");
+        // 25) 按钮文字要读「实际生效的格式」，不能只看 codecB64。
+        check("编码按钮读 shownCodecB64",
+                methodBody(floCode, "private void updateDir()").contains("shownCodecB64()"),
+                "编码按钮只看 codecB64，自动识别时会显示与实际解码格式不符");
+        check("自动识别不覆盖正向编码目标",
+                methodBody(floCode, "private void applyAutoDir(String in)")
+                        .contains("dir = codecB64 ? DIR_TEXT2B64 : DIR_TEXT2BIN;"), "");
 
         System.out.println();
         System.out.println("审查项：" + checked + "  问题：" + problems);
