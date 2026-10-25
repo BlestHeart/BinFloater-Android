@@ -424,6 +424,12 @@ modeBtn.setTextColor(usesRenderMode() ? pal.muted : pal.cardHi);  // ← 错
 
 教训：**同一个设置项有多个写入口时，每个显示它的界面都要有「回前台重新对齐」的机制**，不能只在 `onCreate` 读一次。
 
+**3. 面板收着时换主题，再点开还是旧配色** —— `hidePanel()` 只 `wm.removeView(panel)`，**不置 `panel = null`**，那棵 View 树一直缓存着。`applyLookRefresh()` 只在 `panelVisible` 时才 `recolorPanel()`，收着的时候只把字段 `pal` 换掉了，旧 View 树没人管；`showPanel()` 又直接复用 `panel`（它只判 `panel == null` 才重建），于是「主界面已经变浅色，点开面板还是黑的」。
+
+**修法**：`applyLookRefresh()` 里 `themeChanged && !panelVisible` 时把 `panel` 置 null，逼下次 `showPanel()` 走 `buildPanel()`。
+
+教训：**`removeView()` ≠ 释放**。一个「按需创建、缓存复用」的 View 树，凡是改动配色/字号/布局这类全局外观的路径，都要么就地重刷、要么把缓存丢掉；只改字段不改 View，缓存的那份就是脏的。
+
 **这轮的教训**：静态审查 103 项全是 `contains` 字符串匹配，**上面一条也测不出**。字符串断言能守「结构不能变」，守不住「行为对不对」。像「DOWN 返回 true/false」「先 clamp 还是先重排」这种顺序问题，只有通读代码或真机才能发现。所以流程改成：改完代码先让子 agent 只读通读一遍，再自己逐条核对行号，最后才跑测试、装真机点一遍。
 
 ---
