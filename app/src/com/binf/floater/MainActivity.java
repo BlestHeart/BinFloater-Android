@@ -13,6 +13,8 @@ import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.Window;
+import android.view.WindowInsetsController;
 import android.widget.Button;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
@@ -64,6 +66,7 @@ public class MainActivity extends Activity {
         prefs = getSharedPreferences("binf", Context.MODE_PRIVATE);
         pal = Palette.get(this);
         setContentView(buildUi());
+        applySystemBars();
         requestNotificationPermissionIfNeeded();
     }
 
@@ -102,6 +105,7 @@ public class MainActivity extends Activity {
             pal = now;
             setContentView(buildUi());
             refreshStatus();
+            applySystemBars();
         }
     }
 
@@ -429,8 +433,42 @@ public class MainActivity extends Activity {
         pal = Palette.get(this);
         setContentView(buildUi());
         refreshStatus();
+        applySystemBars();
         // 悬浮窗是同一个进程里的窗口视图，叫它自己重画一遍。
         applyLookToService();
+    }
+
+    /**
+     * 状态栏 / 导航栏跟着主题走。
+     *
+     * 以前 styles.xml 里把 statusBarColor 钉死成 @color/bg（深色），浅色主题下
+     * 状态栏还是深色底、白色图标 —— 看着突兀；反过来深色主题里如果系统栏是浅底
+     * 白图标就直接看不见了。这里按当前配色同时设「栏背景色」和「图标明暗」。
+     */
+    private void applySystemBars() {
+        try {
+            Window w = getWindow();
+            boolean dark = Palette.get(this) == Palette.DARK;
+            w.setStatusBarColor(pal.bg);
+            w.setNavigationBarColor(pal.bg);
+            if (Build.VERSION.SDK_INT >= 30) {
+                WindowInsetsController c = w.getInsetsController();
+                if (c != null) {
+                    int light = WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS
+                            | WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS;
+                    // 「浅色图标」的开关是反的：深色主题要亮图标（关掉 LIGHT），
+                    // 浅色主题要暗图标（打开 LIGHT）。
+                    c.setSystemBarsAppearance(dark ? 0 : light, light);
+                }
+            } else {
+                int flags = View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
+                if (Build.VERSION.SDK_INT >= 26) {
+                    flags |= View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
+                }
+                w.getDecorView().setSystemUiVisibility(dark ? 0 : flags);
+            }
+        } catch (Exception ignored) {
+        }
     }
 
     private void clearHistory() {
