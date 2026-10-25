@@ -172,7 +172,7 @@ onDestroy() → setEnabledPref(false)
 回填开关时有个副作用要防：`setChecked()` 会触发 `OnCheckedChangeListener`，不屏蔽的话
 一次「同步状态」会顺带再 start/stop 一次服务。用 `syncingSwitch` 标志位挡住。
 
-静态审查加 52 项守着（47 → 103，含本轮修掉的 17 个 bug、16 条复审问题与 2 个真机 UI bug 的回归断言，以及球外观 / 历史 / 面板拖动 / Base64 / 主题 / 历史转义的约束）。
+静态审查从 47 项加到 103 项（+56），守着本轮修掉的 17 个 bug、16 条复审问题、3 个真机 UI bug 的回归，以及球外观 / 历史 / 面板拖动 / Base64 / 主题 / 历史转义的约束。
 
 ### 方向自动识别
 
