@@ -28,11 +28,13 @@ public class StaticAudit {
         String main = read(base + "MainActivity.java");
         String flo = read(base + "FloatingService.java");
         String bin = read(base + "BinCore.java");
+        String pal = read(base + "Palette.java");
         String manifest = read("app/AndroidManifest.xml");
         // 反向断言一律对去注释后的代码做，否则会命中「以前写的是…」这类注释
         String mainCode = stripComments(main);
         String floCode = stripComments(flo);
         String binCode = stripComments(bin);
+        String palCode = stripComments(pal);
 
         System.out.println("=== A. 悬浮窗关键点 ===");
         check("用 TYPE_APPLICATION_OVERLAY", flo.contains("TYPE_APPLICATION_OVERLAY"), "");
@@ -108,7 +110,8 @@ public class StaticAudit {
         System.out.println("=== F. 双向转换完整性 ===");
         check("支持文字→二进制", flo.contains("textToBinary"), "");
         check("支持二进制→文字", flo.contains("binaryToText"), "");
-        check("有方向切换", flo.contains("textToBin = !textToBin"), "");
+        // 方向从「两向布尔」扩成四向之后，切换逻辑改成 switch (dir) 轮转。
+        check("有方向切换", flo.contains("case DIR_BIN2TEXT: dir = DIR_TEXT2B64; break;"), "");
         check("自动识别方向", flo.contains("BinCore.autoDetect"), "");
         check("有复制按钮", flo.contains("copyOutput"), "");
         check("有清空按钮", flo.contains("清空"), "");
@@ -187,6 +190,41 @@ public class StaticAudit {
         // 14) 键盘遮挡：面板要监听 ime insets。
         check("面板监听 ime insets", flo.contains("Type.ime()"), "");
         check("面板位置扣掉键盘高度", flo.contains("imeBottom"), "");
+
+        System.out.println("=== I. 球外观 / 历史 / 面板拖动 / Base64 / 主题 的回归守卫 ===");
+        // 15) 球大小与透明度：必须走统一入口，且必须夹在合法区间里。
+        check("有球大小三档", floCode.contains("BUBBLE_SCALES"), "");
+        check("有球透明度四档", floCode.contains("BUBBLE_ALPHAS"), "");
+        check("球大小下标有钳制",
+                floCode.contains("clamp(bubbleScale, 0, BUBBLE_SCALES.length - 1)"), "");
+        check("球透明度夹在 0..100",
+                floCode.contains("clamp(percent, 0, 100)"), "");
+        check("球外观统一入口", floCode.contains("applyBubbleStyle"), "");
+        // 16) 转换历史：环形上限 + 去重 + 不落盘。
+        check("历史有上限常量", floCode.contains("MAX_HISTORY"), "");
+        check("历史按方向区分", floCode.contains("DIR_SEP") || floCode.contains("\"\\u0002\""), "");
+        check("历史去重后再入栈", floCode.contains("history.remove(entry)"), "");
+        check("历史有清空入口", mainCode.contains("清空历史") || floCode.contains("清空历史"), "");
+        // 17) 面板拖动：拖动时不能触发点击，且松手要记住位置。
+        check("有面板拖动实现", floCode.contains("setupPanelDrag"), "");
+        check("面板拖动区分点击与拖动", floCode.contains("if (moved)"), "");
+        check("面板位置有记忆", floCode.contains("panelPinned"), "");
+        check("面板位置落盘", floCode.contains("putInt(\"panel_x\""), "");
+        // 18) Base64 四向转换的四个入口都要在。
+        check("有文字→Base64", binCode.contains("public static String textToBase64"), "");
+        check("有Base64→文字", binCode.contains("public static DecodeResult base64ToText"), "");
+        check("有Base64判定", binCode.contains("public static boolean looksLikeBase64"), "");
+        check("autoDetect 认 Base64", binCode.contains("\"b64text\""), "");
+        check("位串→Base64 走完整实现", binCode.contains("public static String bitsToBase64"), "");
+        // 19) 主题：两套调色板 + 跟随系统 + 不硬编码颜色。
+        check("有 Palette 类", mainCode.contains("Palette") && floCode.contains("Palette"), "");
+        check("主题三模式", palCode.contains("MODE_SYSTEM") && palCode.contains("MODE_LIGHT")
+                && palCode.contains("MODE_DARK"), "");
+        check("主题跟随系统", palCode.contains("UI_MODE_NIGHT"), "");
+        check("主题落盘", mainCode.contains("theme_mode"), "");
+        // 20) 主界面不能再有写死的颜色字面量（都应该走 Palette）。
+        check("主界面不再写死颜色",
+                !mainCode.contains("Color.rgb(") && !mainCode.contains("0xFF0F1117"), "");
 
         System.out.println();
         System.out.println("审查项：" + checked + "  问题：" + problems);

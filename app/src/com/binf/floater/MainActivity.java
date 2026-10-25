@@ -22,18 +22,11 @@ import android.widget.Toast;
 
 /**
  * 主界面：开启悬浮窗 + 说明 + 试一下。
+ *
+ * 颜色全部走 Palette，和悬浮窗面板同源 —— 以前这里写死一套深色，
+ * 系统是浅色时主界面也是黑的，和面板对不上。
  */
 public class MainActivity extends Activity {
-
-    private static final int BG = 0xFF0F1117;
-    private static final int CARD = 0xFF171B24;
-    private static final int CARD_HI = 0xFF1D2230;
-    private static final int TEXT = 0xFFE6EBF5;
-    private static final int MUTED = 0xFF8992A7;
-    private static final int ACCENT = 0xFF7AA2FF;
-    private static final int TEAL = 0xFF5EEAD4;
-    private static final int OK = 0xFF4ADE80;
-    private static final int WARN = 0xFFFBBF24;
 
     private SharedPreferences prefs;
     private TextView statusView;
@@ -42,11 +35,14 @@ public class MainActivity extends Activity {
     private Switch floatingSwitch;
     /** 回填开关状态时置位，避免 setChecked() 反过来触发监听器。 */
     private boolean syncingSwitch = false;
+    /** 当前配色，buildUi 时从 Palette 取一次。 */
+    private Palette pal;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         prefs = getSharedPreferences("binf", Context.MODE_PRIVATE);
+        pal = Palette.get(this);
         setContentView(buildUi());
         requestNotificationPermissionIfNeeded();
     }
@@ -78,6 +74,13 @@ public class MainActivity extends Activity {
             floatingSwitch.setChecked(isFloatingOn());
             syncingSwitch = false;
         }
+        // 系统深浅色可能在后台切了（跟随系统模式下），回来时重画一遍。
+        Palette now = Palette.get(this);
+        if (now != pal) {
+            pal = now;
+            setContentView(buildUi());
+            refreshStatus();
+        }
     }
 
     /**
@@ -103,7 +106,7 @@ public class MainActivity extends Activity {
 
     private View buildUi() {
         ScrollView scroll = new ScrollView(this);
-        scroll.setBackgroundColor(BG);
+        scroll.setBackgroundColor(pal.bg);
 
         root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
@@ -114,14 +117,14 @@ public class MainActivity extends Activity {
         TextView title = new TextView(this);
         title.setText("二进制悬浮窗");
         title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 26);
-        title.setTextColor(TEXT);
+        title.setTextColor(pal.text);
         title.setTypeface(Typeface.DEFAULT_BOLD);
         root.addView(title);
 
         TextView sub = new TextView(this);
         sub.setText("桌面上一个小球，点开就能把剪切板里的文字转成二进制，或者把二进制译回文字");
         sub.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
-        sub.setTextColor(MUTED);
+        sub.setTextColor(pal.muted);
         LinearLayout.LayoutParams subLp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         subLp.topMargin = dp(6);
@@ -132,12 +135,12 @@ public class MainActivity extends Activity {
         LinearLayout statusCard = makeCard();
         statusView = new TextView(this);
         statusView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
-        statusView.setTextColor(TEXT);
+        statusView.setTextColor(pal.text);
         statusCard.addView(statusView);
 
         permView = new TextView(this);
         permView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11);
-        permView.setTextColor(MUTED);
+        permView.setTextColor(pal.muted);
         LinearLayout.LayoutParams plp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         plp.topMargin = dp(8);
@@ -159,6 +162,11 @@ public class MainActivity extends Activity {
         // 开关
         addFloatingSwitch();
 
+        // 外观
+        addSectionTitle("外观");
+        addThemeRow();
+        addBubbleLookRow();
+
         // 用法
         addSectionTitle("怎么用");
         LinearLayout howCard = makeCard();
@@ -167,11 +175,15 @@ public class MainActivity extends Activity {
                 + "2. 点桌面上的「01」小球，面板会自动读剪切板并转换\n"
                 + "3. 点「复制」把结果放回剪切板，粘到别处去\n\n"
                 + "面板上还有输入框，不想走剪切板就直接在里面打字。\n"
-                + "「⇄」切换转换方向，「8位/4位/连写/HEX」切换显示格式。\n"
+                + "「⇄」切换转换方向（文字↔二进制、文字↔Base64），\n"
+                + "「8位/4位/连写/HEX」切换二进制的显示格式。\n"
                 + "「✕」收起面板（悬浮球还在），长按「✕」才彻底关闭悬浮窗。\n"
-                + "长按悬浮球也能弹出快捷菜单。");
+                + "长按悬浮球弹出快捷菜单：切方向、读剪切板、调球大小和不透明度。\n"
+                + "拖动标题栏可以把面板挪走，松手就固定在那个位置；\n"
+                + "点「面板归位」让它重新跟着球走。\n\n"
+                + "面板底部那排小胶囊是最近 20 次输入，点一下就能回到那次内容。");
         how.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
-        how.setTextColor(TEXT);
+        how.setTextColor(pal.text);
         how.setLineSpacing(dp(5), 1f);
         howCard.addView(how);
 
@@ -181,13 +193,31 @@ public class MainActivity extends Activity {
         TextView about = new TextView(this);
         about.setText("编码：UTF-8\n"
                 + "解码：UTF-8 → GBK / Big5（自动挑更像正文的）→ Latin-1 兜底\n"
-                + "支持格式：空格、逗号、分号、下划线、短横线、0b 前缀、完全连写\n"
-                + "判定阈值：去掉分隔符后至少 16 位；不超过 24 位时还必须同时含 0 和 1\n"
-                + "长度上限：单次最多 20000 位（约 2500 字节）");
+                + "二进制支持格式：空格、逗号、分号、下划线、短横线、0b 前缀、完全连写\n"
+                + "二进制判定：去掉分隔符后至少 16 位；不超过 24 位时还必须同时含 0 和 1\n"
+                + "Base64：标准/URL 安全字母表都认，缺 padding 会自动补齐；"
+                + "解出的字节必须是合法 UTF-8 才当作 Base64\n"
+                + "长度上限：二进制单次 20000 位（约 2500 字节）");
         about.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
-        about.setTextColor(MUTED);
+        about.setTextColor(pal.muted);
         about.setLineSpacing(dp(3), 1f);
         aboutCard.addView(about);
+
+        // 数据
+        addSectionTitle("数据");
+        LinearLayout dataCard = makeCard();
+        TextView dataNote = new TextView(this);
+        dataNote.setText("转换历史、球的位置、外观设置都只存在本机，App 没有联网权限。");
+        dataNote.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11);
+        dataNote.setTextColor(pal.muted);
+        dataCard.addView(dataNote);
+
+        Button clearHist = makeButton("清空转换历史", false);
+        clearHist.setOnClickListener(v -> clearHistory());
+        LinearLayout.LayoutParams chlp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(42));
+        chlp.topMargin = dp(12);
+        dataCard.addView(clearHist, chlp);
 
         // 版本 + 重置
         addSectionTitle("版本");
@@ -195,7 +225,7 @@ public class MainActivity extends Activity {
         TextView ver = new TextView(this);
         ver.setText("v" + versionName() + " (" + versionCode() + ")");
         ver.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
-        ver.setTextColor(MUTED);
+        ver.setTextColor(pal.muted);
         verCard.addView(ver);
 
         Button reset = makeButton("重置所有设置", false);
@@ -213,18 +243,166 @@ public class MainActivity extends Activity {
                 + "所以这里点一下才读一次：点小球 → 面板抢到焦点 → 这时读取合法 → 结果直接填好。"
                 + "代价是点的那一下会收起当前键盘，换来的是不需要任何敏感权限。");
         why.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
-        why.setTextColor(MUTED);
+        why.setTextColor(pal.muted);
         why.setLineSpacing(dp(3), 1f);
         whyCard.addView(why);
 
         return scroll;
     }
 
+    /** 主题三档：跟随系统 / 浅色 / 深色。 */
+    private void addThemeRow() {
+        LinearLayout card = makeCard();
+        TextView t = new TextView(this);
+        t.setText("配色");
+        t.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
+        t.setTextColor(pal.text);
+        card.addView(t);
+
+        TextView d = new TextView(this);
+        d.setText("悬浮窗面板和这个界面一起变");
+        d.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11);
+        d.setTextColor(pal.muted);
+        LinearLayout.LayoutParams dlp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        dlp.topMargin = dp(3);
+        card.addView(d, dlp);
+
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        LinearLayout.LayoutParams rlp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(38));
+        rlp.topMargin = dp(10);
+        card.addView(row, rlp);
+
+        int current = prefs.getInt("theme_mode", Palette.MODE_SYSTEM);
+        for (int i = 0; i < 3; i++) {
+            final int mode = i;
+            boolean on = current == i;
+            TextView btn = new TextView(this);
+            btn.setText(Palette.modeLabel(i));
+            btn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+            btn.setGravity(Gravity.CENTER);
+            btn.setTextColor(on ? pal.text : pal.muted);
+            btn.setBackgroundColor(on ? pal.cardHi : pal.card);
+            btn.setOnClickListener(v -> applyTheme(mode));
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                    0, ViewGroup.LayoutParams.MATCH_PARENT, 1f);
+            lp.setMargins(dp(2), 0, dp(2), 0);
+            row.addView(btn, lp);
+        }
+    }
+
+    /** 球大小 / 不透明度，和长按菜单里那两个循环按钮共用同一份设置。 */
+    private void addBubbleLookRow() {
+        LinearLayout card = makeCard();
+        TextView t = new TextView(this);
+        t.setText("悬浮球外观");
+        t.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
+        t.setTextColor(pal.text);
+        card.addView(t);
+
+        int scale = prefs.getInt("bubble_scale", 1);
+        int alpha = prefs.getInt("bubble_alpha", 1);
+        String[] scaleLabels = {"小", "中", "大"};
+        int[] alphas = {100, 80, 60, 40};
+
+        TextView info = new TextView(this);
+        info.setText("大小：" + scaleLabels[Math.max(0, Math.min(2, scale))]
+                + "　不透明度：" + alphas[Math.max(0, Math.min(3, alpha))] + "%"
+                + "（也可以在长按球的菜单里调）");
+        info.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11);
+        info.setTextColor(pal.muted);
+        LinearLayout.LayoutParams ilp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        ilp.topMargin = dp(3);
+        card.addView(info, ilp);
+
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        LinearLayout.LayoutParams rlp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(38));
+        rlp.topMargin = dp(10);
+        card.addView(row, rlp);
+
+        TextView smaller = smallBtn("球小一点");
+        smaller.setOnClickListener(v -> nudgeBubble(-1));
+        row.addView(smaller, weight(1f));
+        TextView bigger = smallBtn("球大一点");
+        bigger.setOnClickListener(v -> nudgeBubble(1));
+        row.addView(bigger, weight(1f));
+        TextView fainter = smallBtn("更透明");
+        fainter.setOnClickListener(v -> nudgeAlpha(-1));
+        row.addView(fainter, weight(1f));
+        TextView solid = smallBtn("更实");
+        solid.setOnClickListener(v -> nudgeAlpha(1));
+        row.addView(solid, weight(1f));
+    }
+
+    /**
+     * 改球大小。服务在跑就让它自己重读设置，不用重启服务 ——
+     * 重启会把用户正在用的面板一起关掉。
+     */
+    private void nudgeBubble(int delta) {
+        int v = prefs.getInt("bubble_scale", 1) + delta;
+        v = Math.max(0, Math.min(2, v));
+        prefs.edit().putInt("bubble_scale", v).apply();
+        applyLookToService();
+        setContentView(buildUi());
+        refreshStatus();
+    }
+
+    private void nudgeAlpha(int delta) {
+        int v = prefs.getInt("bubble_alpha", 1) + delta;
+        v = Math.max(0, Math.min(3, v));
+        prefs.edit().putInt("bubble_alpha", v).apply();
+        applyLookToService();
+        setContentView(buildUi());
+        refreshStatus();
+    }
+
+    /**
+     * 外观改了就通知服务立刻生效。
+     * 用 SHOW_PANEL 会顺手把面板弹出来，这里不合适，所以复用 ACTION_STOP 之外的
+     * 那个「只重读外观」的动作 —— 服务里 onStartCommand 收到它只刷球样式。
+     */
+    private void applyLookToService() {
+        try {
+            Intent i = new Intent(this, FloatingService.class)
+                    .setAction(FloatingService.ACTION_REFRESH_LOOK);
+            startService(i);
+        } catch (Exception ignored) {
+        }
+    }
+
+    private void applyTheme(int mode) {
+        prefs.edit().putInt("theme_mode", mode).apply();
+        pal = Palette.get(this);
+        setContentView(buildUi());
+        refreshStatus();
+        // 悬浮窗是另一个进程里的视图，得叫它自己重画。
+        try {
+            startService(new Intent(this, FloatingService.class)
+                    .setAction(FloatingService.ACTION_REFRESH_LOOK));
+        } catch (Exception ignored) {
+        }
+    }
+
+    private void clearHistory() {
+        prefs.edit().putString("history", "").apply();
+        try {
+            startService(new Intent(this, FloatingService.class)
+                    .setAction(FloatingService.ACTION_REFRESH_LOOK));
+        } catch (Exception ignored) {
+        }
+        toast("转换历史已清空");
+    }
+
     private void addSectionTitle(String text) {
         TextView tv = new TextView(this);
         tv.setText(text);
         tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
-        tv.setTextColor(TEXT);
+        tv.setTextColor(pal.text);
         tv.setTypeface(Typeface.DEFAULT_BOLD);
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
@@ -236,7 +414,7 @@ public class MainActivity extends Activity {
     private LinearLayout makeCard() {
         LinearLayout card = new LinearLayout(this);
         card.setOrientation(LinearLayout.VERTICAL);
-        card.setBackgroundColor(CARD);
+        card.setBackgroundColor(pal.card);
         card.setPadding(dp(14), dp(14), dp(14), dp(14));
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
@@ -245,13 +423,31 @@ public class MainActivity extends Activity {
         return card;
     }
 
+    private LinearLayout.LayoutParams weight(float w) {
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0,
+                ViewGroup.LayoutParams.MATCH_PARENT, w);
+        lp.setMargins(dp(2), 0, dp(2), 0);
+        return lp;
+    }
+
+    private TextView smallBtn(String label) {
+        TextView tv = new TextView(this);
+        tv.setText(label);
+        tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11);
+        tv.setTextColor(pal.text);
+        tv.setBackgroundColor(pal.cardHi);
+        tv.setGravity(Gravity.CENTER);
+        return tv;
+    }
+
     private Button makeButton(String label, boolean primary) {
         Button b = new Button(this);
         b.setText(label);
         b.setAllCaps(false);
         b.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
-        b.setTextColor(primary ? 0xFFCFE0FF : MUTED);
-        b.setBackgroundColor(primary ? 0xFF2B3A5E : CARD_HI);
+        b.setTextColor(primary ? (pal == Palette.DARK ? 0xFFCFE0FF : pal.text) : pal.muted);
+        b.setBackgroundColor(primary ? (pal == Palette.DARK ? 0xFF2B3A5E : pal.accent) : pal.cardHi);
+        if (primary && pal != Palette.DARK) b.setTextColor(0xFFFFFFFF);
         return b;
     }
 
@@ -259,7 +455,7 @@ public class MainActivity extends Activity {
     private void addFloatingSwitch() {
         LinearLayout card = new LinearLayout(this);
         card.setOrientation(LinearLayout.HORIZONTAL);
-        card.setBackgroundColor(CARD);
+        card.setBackgroundColor(pal.card);
         card.setPadding(dp(14), dp(12), dp(14), dp(12));
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
@@ -274,13 +470,13 @@ public class MainActivity extends Activity {
         TextView t = new TextView(this);
         t.setText("启用悬浮窗");
         t.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
-        t.setTextColor(TEXT);
+        t.setTextColor(pal.text);
         textBox.addView(t);
 
         TextView d = new TextView(this);
         d.setText("桌面上的小悬浮球，点开可双向转换（需悬浮窗权限）");
         d.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11);
-        d.setTextColor(MUTED);
+        d.setTextColor(pal.muted);
         LinearLayout.LayoutParams dlp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         dlp.topMargin = dp(3);
@@ -356,26 +552,26 @@ public class MainActivity extends Activity {
 
         if (perm) {
             permView.setText("权限：已授予");
-            permView.setTextColor(OK);
+            permView.setTextColor(pal.ok);
         } else {
             permView.setText("权限：未授予（没有它悬浮球显示不出来）");
-            permView.setTextColor(WARN);
+            permView.setTextColor(pal.warn);
         }
 
         StringBuilder sb = new StringBuilder();
         if (!perm) {
             sb.append("⚠️ 还差一步\n\n点下面的按钮，在系统设置里允许「显示在其他应用上层」。");
-            statusView.setTextColor(WARN);
+            statusView.setTextColor(pal.warn);
         } else if (on) {
             sb.append("✅ 悬浮窗运行中\n\n桌面上应该能看到「01」小球。点它打开面板。");
             if (!fgOk) {
                 sb.append("\n\n⚠️ 前台服务通知没挂上，"
                         + "系统可能会把它回收掉。请检查通知权限。");
             }
-            statusView.setTextColor(fgOk ? OK : WARN);
+            statusView.setTextColor(fgOk ? pal.ok : pal.warn);
         } else {
             sb.append("⚙️ 权限已就绪，但悬浮窗没开\n\n把下面的「启用悬浮窗」打开。");
-            statusView.setTextColor(WARN);
+            statusView.setTextColor(pal.warn);
         }
         statusView.setText(sb.toString());
     }
@@ -412,6 +608,8 @@ public class MainActivity extends Activity {
             stopService(new Intent(this, FloatingService.class));
         } catch (Exception ignored) {
         }
+        pal = Palette.get(this);
+        setContentView(buildUi());
         if (floatingSwitch != null) {
             syncingSwitch = true;
             floatingSwitch.setChecked(false);

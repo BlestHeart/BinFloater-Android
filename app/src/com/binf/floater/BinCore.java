@@ -115,17 +115,34 @@ public final class BinCore {
 
     /**
      * 给一段解码结果打分：常用汉字、ASCII 可打印、常见标点加分；
-     * 控制字符、私用区、生僻扩展区扣分。用来在 GBK / Big5 之间挑更像正文的那个。
+     * 控制字符、私用区、生僻扩展区扣分。用来在 GBK / Big5 之间挑更像正文的那个，
+     * 也用来判断「Base64 解出来的是不是正常文本」。
      */
     public static int scoreText(String s) {
         if (s == null || s.isEmpty()) return Integer.MIN_VALUE;
         int score = 0;
         for (int i = 0; i < s.length(); i++) {
             char c = s.charAt(i);
+            // emoji 在 Java 里是代理对。以前两个代理各扣 2 分，一段纯 emoji
+            // 的文本会被判成「不像正文」，Base64 解码直接被拒。
+            if (Character.isHighSurrogate(c)) {
+                if (i + 1 < s.length() && Character.isLowSurrogate(s.charAt(i + 1))) {
+                    int cp = Character.toCodePoint(c, s.charAt(i + 1));
+                    if (cp >= 0x1F300 && cp <= 0x1FAFF) score += 1;  // emoji
+                    else if (cp >= 0x1D100 && cp <= 0x1D1FF) score += 1; // 音乐符号
+                    else score -= 1;
+                    i++;
+                    continue;
+                }
+                score -= 2;
+                continue;
+            }
+            if (Character.isLowSurrogate(c)) { score -= 2; continue; }
             if (c >= 0x20 && c < 0x7F) score += 2;              // ASCII 可打印
             else if (c >= 0x4E00 && c <= 0x9FFF) score += 3;    // 常用汉字区
             else if (c >= 0x3000 && c <= 0x303F) score += 2;    // 中日韩标点
             else if (c >= 0xFF00 && c <= 0xFFEF) score += 1;    // 全角符号
+            else if (c >= 0x2600 && c <= 0x27BF) score += 1;    // 杂项符号 / 装饰
             else if (c == '\n' || c == '\t' || c == '\r') score += 1;
             else if (c < 0x20) score -= 10;                     // 控制字符
             else if (c >= 0xE000 && c <= 0xF8FF) score -= 8;    // 私用区
@@ -274,9 +291,111 @@ public final class BinCore {
         return text.length() + " 字符 · " + text.getBytes(UTF8).length + " 字节";
     }
 
+    // ---------- Base64 ----------
+
+    /** Base64 正文里允许出现的字符（标准 + URL 安全两套字母表）。 */
+    private static final Pattern B64_CHARS = Pattern.compile("[A-Za-z0-9+/=_-]+");
+
+    /** 文字 -> Base64（UTF-8 编码后转）。 */
+    public static String textToBase64(String text) {
+        if (text == null || text.isEmpty()) return "";
+        return java.util.Base64.getEncoder().encodeToString(text.getBytes(UTF8));
+    }
+
+    /** 位串 -> Base64：先按位还原成字节，再编码。 */
+    public static String bitsToBase64(String bits) {
+        if (bits == null || bits.isEmpty()) return "";
+        return java.util.Base64.getEncoder().encodeToString(bitsToBytes(cleanBits(bits)));
+    }
+
+    /** 去掉空白并把 URL 安全字符换回标准字符，再补齐 padding。 */
+    static String normalizeBase64(String s) {
+        if (s == null) return "";
+        String t = s.replaceAll("[\\s]+", "");
+        t = t.replace('-', '+').replace('_', '/');
+        while (t.endsWith("=")) t = t.substring(0, t.length() - 1);
+        int pad = (4 - t.length() % 4) % 4;
+        StringBuilder sb = new StringBuilder(t);
+        for (int i = 0; i < pad; i++) sb.append('=');
+        return sb.toString();
+    }
+
+    /** Base64 -> 字节。解不出返回 null（不做「尽力而为」的猜测）。 */
+    public static byte[] base64ToBytes(String text) {
+        if (text == null) return null;
+        String raw = text.replaceAll("[\\s]+", "");
+        if (raw.isEmpty()) return null;
+        if (!B64_CHARS.matcher(raw).matches()) return null;
+        try {
+            return java.util.Base64.getDecoder().decode(normalizeBase64(raw));
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /**
+     * 是否「像一段 Base64」。
+     *
+     * 这里刻意保守：Base64 的字母表就是普通英文字母，任何 4 个字母都能「解」出
+     * 3 个字节，所以光看字符集一定误判。真正的判据是**解出来的东西像不像文本**：
+     * 必须能严格按 UTF-8 解出、控制字符占比低、打分不为负。
+     * 例："test" 解出 B5 EB 2D，不是合法 UTF-8 → 判成普通文字。
+     */
+    public static boolean looksLikeBase64(String text) {
+        if (text == null) return false;
+        String raw = text.trim();
+        if (raw.length() < 8) return false;
+        if (raw.indexOf('\n') >= 0) return false;
+        if (!B64_CHARS.matcher(raw).matches()) return false;
+        String stripped = raw.replaceAll("=", "");
+        // 长度必须是 4 的倍数（或至少去掉 padding 后能补齐）
+        if (raw.length() % 4 != 0) return false;
+        // 纯字母且没有任何数字/+//= 的串，多半是英文单词，不冒这个险
+        if (stripped.matches("[A-Za-z]+") && !raw.matches(".*[+=].*")) {
+            byte[] probe = base64ToBytes(raw);
+            String t = probe == null ? null : strictDecode(probe, "UTF-8");
+            if (t == null) return false;
+        }
+        byte[] data = base64ToBytes(raw);
+        if (data == null || data.length == 0) return false;
+        String t = strictDecode(data, "UTF-8");
+        if (t == null) return false;
+        if (t.isEmpty()) return false;
+        if (countControls(t) > t.length() * MAX_CONTROL_RATIO) return false;
+        return scoreText(t) > 0;
+    }
+
+    /** Base64 文本 -> 文字。 */
+    public static DecodeResult base64ToText(String input) {
+        if (input == null || input.trim().isEmpty()) {
+            return new DecodeResult(null, "内容是空的", false, 0, 0);
+        }
+        byte[] data = base64ToBytes(input);
+        if (data == null) {
+            return new DecodeResult(null, "不是合法的 Base64（含非法字符或长度不对）", false, 0, 0);
+        }
+        if (data.length == 0) {
+            return new DecodeResult(null, "Base64 解出来是空的", false, 0, 0);
+        }
+        if (data.length > MAX_BITS / 8) {
+            return new DecodeResult(null, "内容过长（" + data.length + " 字节），最多支持 "
+                    + (MAX_BITS / 8) + " 字节", false, data.length, 0);
+        }
+        String text = bytesToText(data);
+        int ctrl = countControls(text);
+        if (!text.isEmpty() && ctrl > text.length() * MAX_CONTROL_RATIO) {
+            return new DecodeResult(null, "解出 " + ctrl + " 个不可打印字符（共 "
+                    + text.length() + " 个），这段可能不是 Base64。十六进制："
+                    + previewHex(data, 24), false, data.length, 0);
+        }
+        return new DecodeResult(text, "已解码 " + data.length + " 字节（Base64）",
+                true, data.length, 0);
+    }
+
     /** 自动判定方向。 */
     public static String autoDetect(String text) {
         if (looksLikeBinary(text)) return "bin2text";
+        if (looksLikeBase64(text)) return "b64text";
         if (text != null && !text.trim().isEmpty()) return "text2bin";
         return "unknown";
     }
@@ -317,6 +436,7 @@ public final class BinCore {
             case "compact": return bits;
             case "group4":  return groupBits(bits, 4, " ");
             case "hex":     return bitsToHex(bits);
+            case "base64":  return bitsToBase64(bits);
             case "group8":
             default:        return groupBits(bits, 8, " ");
         }

@@ -60,12 +60,12 @@ d8 --min-api 34 --output build/dex build/classes/**/*.class
 bash run_tests.sh
 ```
 
-两组共累计 129 项：
+两组共累计 186 项：
 
 | 组 | 项数 | 测什么 |
 |---|---|---|
-| 编解码核心 | 53 | `BinCore` 的双向转换、分隔符、编码回退、阈值判定、长度上限与 hex 不截断 |
-| 静态审查 | 76 | 读源码做约束检查（见下） |
+| 编解码核心 | 87 | `BinCore` 的双向转换、分隔符、编码回退、阈值判定、长度上限、hex 不截断、Base64 编解码与判定 |
+| 静态审查 | 99 | 读源码做约束检查（见下） |
 
 ### 为什么有「静态审查」这一组
 
@@ -172,13 +172,18 @@ onDestroy() → setEnabledPref(false)
 回填开关时有个副作用要防：`setChecked()` 会触发 `OnCheckedChangeListener`，不屏蔽的话
 一次「同步状态」会顺带再 start/stop 一次服务。用 `syncingSwitch` 标志位挡住。
 
-静态审查加 29 项守着（47 → 76，含本轮修掉的 17 个 bug 的回归断言）。
+静态审查加 52 项守着（47 → 99，含本轮修掉的 17 个 bug 的回归断言，以及球外观 / 历史 / 面板拖动 / Base64 / 主题的约束）。
 
 ### 方向自动识别
 
+方向从「两向布尔」扩成了四向字符串常量，`⇄` 按钮按 `switch (dir)` 轮转：
+
 ```java
-textToBin = !BinCore.looksLikeBinary(text);
+DIR_TEXT2BIN → DIR_BIN2TEXT → DIR_TEXT2B64 → DIR_B64TEXT → 回到 DIR_TEXT2BIN
 ```
+
+自动识别走 `BinCore.autoDetect(text)`，返回 `bin2text` / `b64text` / `text2bin`；
+用户手动切过方向之后 `dirPinnedByUser = true`，自动识别不再覆盖他的选择。
 
 `looksLikeBinary()` 的阈值设计：
 
@@ -198,8 +203,24 @@ binaryToText(String bits)                    // 0/1 串 → DecodeResult
 looksLikeBinary(String s)                    // 判断要不要按二进制处理
 describe(String text)                        // "N 字符 · M 字节"
 textToHex(String text)                       // 文字 → 十六进制
+textToBase64(String text)                    // 文字 → Base64
+base64ToText(String b64)                     // Base64 → DecodeResult
+looksLikeBase64(String s)                    // 判断要不要按 Base64 处理
+bitsToBase64(String bits)                    // 0/1 串 → Base64
+renderBits(String bits, String mode)         // 按显示模式渲染
 autoDetect(String s)                         // 返回方向
 ```
+
+### Base64 判定的难点
+
+Base64 的字母表就是普通英文字母，任何 4 个字母都能「解」出 3 个字节，
+所以不能只看字符集。判据是**解出来之后像不像正常文本**：`scoreText()`
+给常用汉字 / ASCII 可打印 / emoji 加分，给控制字符 / 私用区扣分，
+分数不够就判定不是 Base64。这样 `test`、`HelloWorld` 不会被误判。
+
+顺带修掉一个真实 bug：`scoreText()` 早期把 emoji 的代理对当「可疑字符」各扣 2 分，
+导致纯 emoji 的 Base64 解出来被判成「不像正文」而被拒。现在代理对会合并成
+一个 code point 打分，emoji 区间加分。
 
 ### 编码回退顺序
 
@@ -228,12 +249,13 @@ app/
   res/values/styles.xml        主题
   res/mipmap-*/ic_launcher.png 图标
   src/com/binf/floater/
-    BinCore.java               编解码核心
-    FloatingService.java       悬浮球 + 面板
-    MainActivity.java          设置界面
+    BinCore.java               编解码核心（含 Base64）
+    FloatingService.java       悬浮球 + 面板 + 历史 + 拖动
+    MainActivity.java          设置界面（主题 / 历史 / 球外观）
+    Palette.java               深浅色两套调色板
 tools/
-  CoreTest.java                53 项编解码测试
-  StaticAudit.java             76 项源码约束检查
+  CoreTest.java                87 项编解码测试
+  StaticAudit.java             99 项源码约束检查
   push_github.sh               推送脚本
 signing/
   README.md                    密钥说明（密钥本身不进 git）
@@ -309,7 +331,7 @@ v2.0 的改动：
 | APK 大小 | 8.1 MB | 29 KB |
 | `classes.dex` | 105 KB | 29 KB |
 | 源文件 | 9 个 | 3 个 |
-| 测试断言 | 467 项 | 89 项 |
+| 测试断言 | 467 项 | 186 项 |
 | 权限 | 6 个（含 INTERNET） | 4 个 |
 
 输入法代码全部在 git 历史里（v1.2 的 tag/commit），需要的话能翻出来。
@@ -350,8 +372,9 @@ v2.0 的改动：
 
 ## 后续可做
 
-- **历史记录**：记最近 N 次转换结果
+- **开机自启**：加 `RECEIVE_BOOT_COMPLETED` + 一个 BootReceiver，重启后自动把球放出来（用户当前没要）
 - **多编码手动切换**：现在自动回退，可以给个下拉让用户指定（目前只能靠回退顺序碰运气）
 - **粘贴即转**：面板打开后监听输入框的 paste 事件
-- **悬浮球样式**：现在只有 `01` / `BIN` 两行字，可以做透明度 / 尺寸档位
 - **批量文件**：把剪切板里的整段 hex dump 批量转成文件（要写存储权限，暂不做）
+- **历史加密**：现在转换历史明文存在 App 私有目录，要更稳妥可以上 EncryptedSharedPreferences
+- **自定义球图标**：现在只有 `01` / `BIN` 两行字，可以让用户换字

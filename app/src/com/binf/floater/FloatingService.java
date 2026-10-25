@@ -13,6 +13,7 @@ import android.content.SharedPreferences;
 import android.content.res.Configuration;
 import android.graphics.PixelFormat;
 import android.graphics.Typeface;
+import android.graphics.drawable.GradientDrawable;
 import android.os.Build;
 import android.os.Handler;
 import android.os.IBinder;
@@ -27,10 +28,16 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.view.WindowManager;
 import android.widget.EditText;
+import android.widget.HorizontalScrollView;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
+
+import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.Deque;
+import java.util.List;
 
 /**
  * 悬浮窗：桌面上一个小气泡，点开就是转换面板。
@@ -50,14 +57,11 @@ public class FloatingService extends Service {
     /** 通知上的两个动作，交给 onStartCommand 处理。 */
     public static final String ACTION_SHOW_PANEL = "com.binf.floater.action.SHOW_PANEL";
     public static final String ACTION_STOP = "com.binf.floater.action.STOP";
-
-    private static final int BG = 0xFF0F1117;
-    private static final int CARD_HI = 0xFF1D2230;
-    private static final int TEXT = 0xFFE6EBF5;
-    private static final int MUTED = 0xFF8992A7;
-    private static final int TEAL = 0xFF5EEAD4;
-    private static final int ACCENT = 0xFF7AA2FF;
-    private static final int ERR = 0xFFF87171;
+    /**
+     * 只重读外观设置（配色 / 球大小 / 不透明度 / 历史）并重画，不动别的。
+     * 主界面改完设置用它通知服务 —— 不能重启服务，那会把用户开着的面板一起关掉。
+     */
+    public static final String ACTION_REFRESH_LOOK = "com.binf.floater.action.REFRESH_LOOK";
 
     /** 输入防抖：每敲一个字就全量重算，长文本会卡死。 */
     private static final int REFRESH_DEBOUNCE_MS = 120;
@@ -77,8 +81,30 @@ public class FloatingService extends Service {
     /** 点外面收起面板后，这么短时间内忽略气泡点击，否则会「收了又开」。 */
     private static final int SUPPRESS_TOGGLE_MS = 350;
 
+    // ---------- 转换方向 ----------
+    private static final String DIR_TEXT2BIN = "text2bin";
+    private static final String DIR_BIN2TEXT = "bin2text";
+    private static final String DIR_TEXT2B64 = "text2b64";
+    private static final String DIR_B64TEXT = "b64text";
+
+    // ---------- 历史 ----------
+    private static final int MAX_HISTORY = 20;
+    /** 历史条目里每条最多存多少字符（存的是输入，不是输出）。 */
+    private static final int MAX_HISTORY_CHARS = 120;
+    private static final String HIST_SEP = "\u0001";
+
+    // ---------- 气泡外观 ----------
+    /** 球大小的三档缩放。 */
+    private static final float[] BUBBLE_SCALES = {0.82f, 1.0f, 1.28f};
+    private static final String[] BUBBLE_SCALE_LABELS = {"小", "中", "大"};
+    /** 球背景不透明度的四档（百分比）。 */
+    private static final int[] BUBBLE_ALPHAS = {100, 80, 60, 40};
+
     private WindowManager wm;
     private LinearLayout bubble;
+    /** 球里那两行字，调大小/换主题时要单独改它们的字号和颜色。 */
+    private TextView bubbleMark;
+    private TextView bubbleWord;
     private ScrollView panel;
     private LinearLayout menu;
     private WindowManager.LayoutParams bubbleLp;
@@ -93,8 +119,17 @@ public class FloatingService extends Service {
     private TextView status;
     private TextView dirLabel;
     private TextView modeBtn;
-    private boolean textToBin = true;
-    /** 用户手动按过 ⇄ 之后，自动识别就不再改方向。 */
+    /** 历史条目的横向容器。 */
+    private LinearLayout historyRow;
+    private HorizontalScrollView historyBar;
+    /** 面板标题栏，拖动它移动面板。 */
+    private LinearLayout panelHead;
+
+    /** 当前配色（深/浅）。 */
+    private Palette pal;
+
+    private String dir = DIR_TEXT2BIN;
+    /** 用户手动切过方向之后，自动识别就不再改方向。 */
     private boolean dirPinnedByUser = false;
     /** group8 / group4 / compact / hex。 */
     private String renderMode = "group8";
@@ -103,6 +138,18 @@ public class FloatingService extends Service {
     /** 上次自动读到的剪切板内容，用来判断「面板重开时要不要覆盖」。 */
     private String lastClip = null;
     private long suppressToggleUntil = 0;
+
+    /** 0/1/2 → BUBBLE_SCALES 下标。 */
+    private int bubbleScale = 1;
+    /** 0..3 → BUBBLE_ALPHAS 下标。 */
+    private int bubbleAlpha = 1;
+
+    /** 面板被用户拖动过之后就固定在那个位置，不再跟着球走。 */
+    private boolean panelPinned = false;
+    private int panelX = 0;
+    private int panelY = 0;
+
+    private final Deque<String> history = new ArrayDeque<String>();
 
     private Handler handler;
     /** 打开面板时自动读一次剪切板的标记，避免面板重绘时反复读。 */
@@ -136,8 +183,15 @@ public class FloatingService extends Service {
         setEnabledPref(true);
         wm = (WindowManager) getSystemService(Context.WINDOW_SERVICE);
         handler = new Handler(Looper.getMainLooper());
+        pal = Palette.get(this);
         SharedPreferences p = prefs();
         renderMode = p.getString("render_mode", "group8");
+        bubbleScale = clamp(p.getInt("bubble_scale", 1), 0, BUBBLE_SCALES.length - 1);
+        bubbleAlpha = clamp(p.getInt("bubble_alpha", 1), 0, BUBBLE_ALPHAS.length - 1);
+        panelPinned = p.getBoolean("panel_pinned", false);
+        panelX = p.getInt("panel_x", 0);
+        panelY = p.getInt("panel_y", 0);
+        loadHistory();
         startForegroundSafe();
         createBubble();
     }
@@ -152,6 +206,10 @@ public class FloatingService extends Service {
         }
         if (ACTION_SHOW_PANEL.equals(action) && bubble != null) {
             showPanel();
+            return START_STICKY;
+        }
+        if (ACTION_REFRESH_LOOK.equals(action)) {
+            applyLookRefresh();
             return START_STICKY;
         }
         // START_STICKY：前台服务被系统回收后让系统有机会重建。
@@ -245,6 +303,12 @@ public class FloatingService extends Service {
         return v < lo ? lo : (v > hi ? hi : v);
     }
 
+    /** 把颜色按 0..100 的百分比套上不透明度。 */
+    private static int withAlpha(int color, int percent) {
+        int a = Math.round(255f * clamp(percent, 0, 100) / 100f);
+        return (color & 0x00FFFFFF) | (a << 24);
+    }
+
     // ---------- 悬浮球 ----------
 
     private void createBubble() {
@@ -255,23 +319,19 @@ public class FloatingService extends Service {
         bubble = new LinearLayout(this);
         bubble.setOrientation(LinearLayout.VERTICAL);
         bubble.setGravity(Gravity.CENTER);
-        bubble.setBackgroundColor(0xE60F1117);
-        bubble.setPadding(dp(10), dp(8), dp(10), dp(8));
 
-        TextView t = new TextView(this);
-        t.setText("01");
-        t.setTextSize(TypedValue.COMPLEX_UNIT_SP, 18);
-        t.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
-        t.setTextColor(TEAL);
-        t.setGravity(Gravity.CENTER);
-        bubble.addView(t);
+        bubbleMark = new TextView(this);
+        bubbleMark.setText("01");
+        bubbleMark.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
+        bubbleMark.setGravity(Gravity.CENTER);
+        bubble.addView(bubbleMark);
 
-        TextView c = new TextView(this);
-        c.setText("BIN");
-        c.setTextSize(TypedValue.COMPLEX_UNIT_SP, 8);
-        c.setTextColor(ACCENT);
-        c.setGravity(Gravity.CENTER);
-        bubble.addView(c);
+        bubbleWord = new TextView(this);
+        bubbleWord.setText("BIN");
+        bubbleWord.setGravity(Gravity.CENTER);
+        bubble.addView(bubbleWord);
+
+        applyBubbleStyle();
 
         // 气泡必须 NOT_FOCUSABLE：它只是个按钮，抢焦点会打断用户正在做的事。
         bubbleLp = new WindowManager.LayoutParams(
@@ -313,12 +373,38 @@ public class FloatingService extends Service {
         }
     }
 
+    /**
+     * 把当前的大小档 / 不透明度 / 配色套到球上。
+     * 调完要重新 updateViewLayout，否则窗口尺寸不会跟着变。
+     */
+    private void applyBubbleStyle() {
+        if (bubble == null) return;
+        float s = BUBBLE_SCALES[clamp(bubbleScale, 0, BUBBLE_SCALES.length - 1)];
+        int padH = dp(10 * s);
+        int padV = dp(8 * s);
+        bubble.setPadding(padH, padV, padH, padV);
+        bubble.setBackgroundColor(withAlpha(pal.bg,
+                BUBBLE_ALPHAS[clamp(bubbleAlpha, 0, BUBBLE_ALPHAS.length - 1)]));
+        if (bubbleMark != null) {
+            bubbleMark.setTextSize(TypedValue.COMPLEX_UNIT_SP, 18 * s);
+            bubbleMark.setTextColor(pal.teal);
+        }
+        if (bubbleWord != null) {
+            bubbleWord.setTextSize(TypedValue.COMPLEX_UNIT_SP, 8 * s);
+            bubbleWord.setTextColor(pal.accent);
+        }
+    }
+
     private int bubbleW() {
-        return bubble == null || bubble.getWidth() <= 0 ? dp(56) : bubble.getWidth();
+        return bubble == null || bubble.getWidth() <= 0
+                ? Math.round(dp(56) * BUBBLE_SCALES[clamp(bubbleScale, 0, BUBBLE_SCALES.length - 1)])
+                : bubble.getWidth();
     }
 
     private int bubbleH() {
-        return bubble == null || bubble.getHeight() <= 0 ? dp(56) : bubble.getHeight();
+        return bubble == null || bubble.getHeight() <= 0
+                ? Math.round(dp(56) * BUBBLE_SCALES[clamp(bubbleScale, 0, BUBBLE_SCALES.length - 1)])
+                : bubble.getHeight();
     }
 
     /** 把球夹在屏幕内，并且不让它钻进状态栏底下。 */
@@ -396,6 +482,63 @@ public class FloatingService extends Service {
         });
     }
 
+    /**
+     * 面板拖动：拖标题栏移动面板，松手后固定在那儿（不再跟着球跑）。
+     * 单独写一份而不是复用 setupDrag，因为面板没有长按菜单，而且落点要落盘。
+     */
+    private void setupPanelDrag(View handle) {
+        handle.setOnTouchListener(new View.OnTouchListener() {
+            float downX, downY;
+            int startX, startY;
+            boolean moved;
+
+            @Override
+            public boolean onTouch(View view, MotionEvent e) {
+                if (panelLp == null) return false;
+                switch (e.getAction()) {
+                    case MotionEvent.ACTION_DOWN:
+                        downX = e.getRawX();
+                        downY = e.getRawY();
+                        startX = panelLp.x;
+                        startY = panelLp.y;
+                        moved = false;
+                        return false;
+                    case MotionEvent.ACTION_MOVE: {
+                        float dx = e.getRawX() - downX;
+                        float dy = e.getRawY() - downY;
+                        if (Math.abs(dx) > dp(6) || Math.abs(dy) > dp(6)) moved = true;
+                        if (moved) {
+                            int pw = panelLp.width > 0 ? panelLp.width : dp(292);
+                            int ph = panelLp.height > 0 ? panelLp.height : dp(240);
+                            panelLp.x = clamp(startX + (int) dx, 0, screenW() - pw);
+                            panelLp.y = clamp(startY + (int) dy, statusBarHeight(),
+                                    screenH() - ph);
+                            try { wm.updateViewLayout(panel, panelLp); } catch (Exception ignored) {}
+                        }
+                        return moved;
+                    }
+                    case MotionEvent.ACTION_UP:
+                        if (moved) {
+                            // 拖过就固定住，否则下次点球面板又跳回球旁边，白拖。
+                            panelPinned = true;
+                            panelX = panelLp.x;
+                            panelY = panelLp.y;
+                            try {
+                                prefs().edit().putBoolean("panel_pinned", true)
+                                        .putInt("panel_x", panelX)
+                                        .putInt("panel_y", panelY).apply();
+                            } catch (Exception ignored) {}
+                            view.setPressed(false);
+                            return true;
+                        }
+                        return false;
+                    default:
+                        return false;
+                }
+            }
+        });
+    }
+
     /** 拖到贴边时吸过去，省得留一条缝。 */
     private void snapToEdge() {
         if (bubbleLp == null) return;
@@ -419,6 +562,13 @@ public class FloatingService extends Service {
         // 转屏后球可能停在屏外（FLAG_LAYOUT_NO_LIMITS 不会被系统夹回来），
         // 面板坐标也要跟着重算。
         if (bubbleLp == null || wm == null || bubble == null) return;
+        // 系统深浅色变了（或转屏）都要重新取一次配色。
+        Palette np = Palette.get(this);
+        if (np != pal) {
+            pal = np;
+            applyBubbleStyle();
+            recolorPanel();
+        }
         clampBubble();
         try { wm.updateViewLayout(bubble, bubbleLp); } catch (Exception ignored) {}
         if (panelVisible) {
@@ -511,9 +661,17 @@ public class FloatingService extends Service {
     }
 
     private void syncPanelPosTo(WindowManager.LayoutParams lp) {
-        if (bubbleLp == null || lp == null) return;
+        if (lp == null) return;
         int pw = lp.width > 0 ? lp.width : dp(292);
         int ph = lp.height > 0 ? lp.height : dp(240);
+        if (panelPinned) {
+            // 用户拖过面板：位置固定，但转屏/键盘后仍要夹回屏内。
+            lp.x = clamp(panelX, 0, screenW() - pw);
+            lp.y = clamp(panelY, statusBarHeight(),
+                    screenH() - ph - dp(4) - imeBottom);
+            return;
+        }
+        if (bubbleLp == null) return;
         // 以前只夹下界不夹上界：球拖到右边缘/底部时面板整块跑到屏外，
         // 面板其实「开着」但看不见，再点球又收起 —— 用户观感是「点了没反应」。
         lp.x = clamp(bubbleLp.x, dp(4), screenW() - pw - dp(4));
@@ -523,8 +681,17 @@ public class FloatingService extends Service {
                 bottomLimit);
     }
 
+    /** 把面板解绑，回到「跟着球走」。 */
+    private void unpinPanel() {
+        panelPinned = false;
+        try { prefs().edit().putBoolean("panel_pinned", false).apply(); } catch (Exception ignored) {}
+        syncPanelPos();
+    }
+
     private void hidePanel() {
         if (panelVisible && panel != null) {
+            // 收起前把当前输入记进历史，省得用户手打的内容丢在面板里。
+            recordHistory(input == null ? "" : input.getText().toString());
             try { wm.removeView(panel); } catch (Exception ignored) {}
             panelVisible = false;
             autoReadPending = false;
@@ -543,7 +710,7 @@ public class FloatingService extends Service {
         TextView tv = new TextView(this);
         tv.setText(label);
         tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
-        tv.setTextColor(TEXT);
+        tv.setTextColor(pal.text);
         tv.setPadding(dp(14), dp(9), dp(14), dp(9));
         tv.setOnClickListener(l);
         return tv;
@@ -554,15 +721,32 @@ public class FloatingService extends Service {
         if (wm == null || bubbleLp == null) return;
         LinearLayout m = new LinearLayout(this);
         m.setOrientation(LinearLayout.VERTICAL);
-        m.setBackgroundColor(CARD_HI);
-        m.addView(menuBtn("⇄  切换方向", v -> {
-            textToBin = !textToBin;
+        m.setBackgroundColor(pal.cardHi);
+        m.addView(menuBtn("⇄  切换方向（" + dirLabelText() + "）", v -> {
+            cycleDir();
             dirPinnedByUser = true;
-            updateDir();
-            flushRefresh();
             hideMenu();
         }));
         m.addView(menuBtn("📋  读剪切板", v -> { hideMenu(); readClip(false); }));
+        m.addView(menuBtn("◐  球大小：" + BUBBLE_SCALE_LABELS[
+                clamp(bubbleScale, 0, BUBBLE_SCALES.length - 1)], v -> {
+            bubbleScale = (bubbleScale + 1) % BUBBLE_SCALES.length;
+            saveBubbleLook();
+            applyBubbleStyle();
+            relayoutBubble();
+            hideMenu();
+        }));
+        m.addView(menuBtn("◑  球不透明度：" + BUBBLE_ALPHAS[
+                clamp(bubbleAlpha, 0, BUBBLE_ALPHAS.length - 1)] + "%", v -> {
+            bubbleAlpha = (bubbleAlpha + 1) % BUBBLE_ALPHAS.length;
+            saveBubbleLook();
+            applyBubbleStyle();
+            relayoutBubble();
+            hideMenu();
+        }));
+        if (panelPinned) {
+            m.addView(menuBtn("↺  面板回到球旁边", v -> { hideMenu(); unpinPanel(); }));
+        }
         m.addView(menuBtn("✕  关闭悬浮窗", v -> {
             hideMenu();
             setEnabledPref(false);
@@ -613,11 +797,140 @@ public class FloatingService extends Service {
         menuLp = null;
     }
 
+    private void saveBubbleLook() {
+        try {
+            prefs().edit().putInt("bubble_scale", bubbleScale)
+                    .putInt("bubble_alpha", bubbleAlpha).apply();
+        } catch (Exception ignored) {}
+    }
+
+    /**
+     * 主界面改了外观（配色 / 球大小 / 不透明度 / 清历史）后，服务收到通知自己重读。
+     *
+     * 为什么不让主界面直接改静态字段：这是跨进程/跨组件的调用，靠 Intent 传值
+     * 更稳，而且服务被重建时也能从 SharedPreferences 读回一致的值。
+     */
+    private void applyLookRefresh() {
+        SharedPreferences p = prefs();
+        bubbleScale = clamp(p.getInt("bubble_scale", bubbleScale),
+                0, BUBBLE_SCALES.length - 1);
+        bubbleAlpha = clamp(p.getInt("bubble_alpha", bubbleAlpha),
+                0, BUBBLE_ALPHAS.length - 1);
+        Palette np = Palette.get(this);
+        boolean themeChanged = np != pal;
+        pal = np;
+        loadHistory();
+        applyBubbleStyle();
+        relayoutBubble();
+        if (panel != null && panelVisible) {
+            if (themeChanged) recolorPanel();
+            else rebuildHistoryBar();
+        }
+        hideMenu();
+    }
+
+    /** 球换了尺寸之后要重新夹位置并刷新窗口。 */
+    private void relayoutBubble() {
+        if (bubble == null || bubbleLp == null || wm == null) return;
+        clampBubble();
+        try { wm.updateViewLayout(bubble, bubbleLp); } catch (Exception ignored) {}
+        if (panelVisible) syncPanelPos();
+    }
+
+    // ---------- 历史 ----------
+
+    private void loadHistory() {
+        history.clear();
+        try {
+            String raw = prefs().getString("history", "");
+            if (raw == null || raw.isEmpty()) return;
+            for (String item : raw.split(HIST_SEP)) {
+                if (!item.isEmpty() && history.size() < MAX_HISTORY) history.addLast(item);
+            }
+        } catch (Exception ignored) {}
+    }
+
+    private void saveHistory() {
+        try {
+            StringBuilder sb = new StringBuilder();
+            for (String item : history) {
+                if (sb.length() > 0) sb.append(HIST_SEP);
+                sb.append(item);
+            }
+            prefs().edit().putString("history", sb.toString()).apply();
+        } catch (Exception ignored) {}
+    }
+
+    /**
+     * 记一条历史。存的是「输入原文」，不是输出 —— 输出可以随时重算，
+     * 而用户真正想找回来的是「刚才那段文字/那串 0/1」。
+     */
+    private void recordHistory(String text) {
+        if (text == null) return;
+        String t = text.trim();
+        if (t.isEmpty()) return;
+        if (t.length() > MAX_HISTORY_CHARS) t = t.substring(0, MAX_HISTORY_CHARS) + "…";
+        String entry = dir + "\u0002" + t;
+        // 和最近一条重复就不重复记（来回切面板不该刷出一堆同样的条目）。
+        if (!history.isEmpty() && history.peekFirst().equals(entry)) return;
+        history.remove(entry);
+        history.addFirst(entry);
+        while (history.size() > MAX_HISTORY) history.removeLast();
+        saveHistory();
+        rebuildHistoryBar();
+    }
+
+    private void clearHistory() {
+        history.clear();
+        saveHistory();
+        rebuildHistoryBar();
+        toast("历史已清空");
+    }
+
+    /** 重建面板里的历史条（历史变化 / 换主题时调用）。 */
+    private void rebuildHistoryBar() {
+        if (historyRow == null) return;
+        historyRow.removeAllViews();
+        if (history.isEmpty()) {
+            TextView empty = new TextView(this);
+            empty.setText("（暂无历史）");
+            empty.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10);
+            empty.setTextColor(pal.muted);
+            empty.setPadding(dp(4), dp(2), dp(4), dp(2));
+            historyRow.addView(empty);
+            return;
+        }
+        for (String entry : history) {
+            int sep = entry.indexOf('\u0002');
+            String d = sep < 0 ? DIR_TEXT2BIN : entry.substring(0, sep);
+            String text = sep < 0 ? entry : entry.substring(sep + 1);
+            TextView chip = new TextView(this);
+            chip.setText(dirShortLabel(d) + " " + text.replace('\n', ' '));
+            chip.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10);
+            chip.setTextColor(pal.accent);
+            chip.setBackgroundColor(pal.cardHi);
+            chip.setPadding(dp(8), dp(4), dp(8), dp(4));
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            lp.rightMargin = dp(6);
+            chip.setLayoutParams(lp);
+            chip.setOnClickListener(v -> {
+                if (input == null) return;
+                dir = d;
+                dirPinnedByUser = true;
+                input.setText(text);
+                updateDir();
+                flushRefresh();
+            });
+            historyRow.addView(chip);
+        }
+    }
+
     // ---------- 面板 UI ----------
 
     private ScrollView buildPanel() {
         ScrollView sc = new ScrollView(this);
-        sc.setBackgroundColor(BG);
+        sc.setBackgroundColor(pal.bg);
         // 面板能获焦，返回键要先还给面板，不然按 BACK 没反应（只能去点 ✕）。
         sc.setOnKeyListener((v, keyCode, event) -> {
             if (keyCode == android.view.KeyEvent.KEYCODE_BACK
@@ -644,15 +957,16 @@ public class FloatingService extends Service {
         sc.addView(root, new ScrollView.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
-        // 标题栏
+        // 标题栏（同时也是面板拖动把手）
         LinearLayout head = new LinearLayout(this);
         head.setOrientation(LinearLayout.HORIZONTAL);
         head.setGravity(Gravity.CENTER_VERTICAL);
+        panelHead = head;
 
         TextView title = new TextView(this);
         title.setText("二进制悬浮窗");
         title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
-        title.setTextColor(TEXT);
+        title.setTextColor(pal.text);
         title.setTypeface(Typeface.DEFAULT_BOLD);
         head.addView(title, new LinearLayout.LayoutParams(0,
                 ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
@@ -666,10 +980,8 @@ public class FloatingService extends Service {
         TextView swap = smallBtn("⇄");
         swap.setContentDescription("切换转换方向");
         swap.setOnClickListener(v -> {
-            textToBin = !textToBin;
+            cycleDir();
             dirPinnedByUser = true;
-            updateDir();
-            flushRefresh();
         });
         LinearLayout.LayoutParams slp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
@@ -697,20 +1009,21 @@ public class FloatingService extends Service {
 
         root.addView(head, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        setupPanelDrag(head);
 
         // 方向说明
         dirLabel = new TextView(this);
         dirLabel.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11);
-        dirLabel.setTextColor(TEAL);
+        dirLabel.setTextColor(pal.teal);
         dirLabel.setPadding(0, dp(6), 0, dp(2));
         root.addView(dirLabel);
 
         // 输入
         input = new EditText(this);
         input.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
-        input.setTextColor(TEXT);
-        input.setHintTextColor(0xFF5B6579);
-        input.setBackgroundColor(CARD_HI);
+        input.setTextColor(pal.text);
+        input.setHintTextColor(pal.muted);
+        input.setBackgroundColor(pal.cardHi);
         input.setPadding(dp(8), dp(6), dp(8), dp(6));
         input.setMaxLines(3);
         // 只写 TYPE_CLASS_TEXT 是单行语义：回车变成「完成」，与 3 行输入框不符。
@@ -728,14 +1041,14 @@ public class FloatingService extends Service {
 
         // 输出
         ScrollView out = new ScrollView(this);
-        out.setBackgroundColor(CARD_HI);
+        out.setBackgroundColor(pal.cardHi);
         LinearLayout.LayoutParams olp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, dp(84));
         olp.topMargin = dp(6);
         output = new TextView(this);
         output.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
         output.setTypeface(Typeface.MONOSPACE);
-        output.setTextColor(TEAL);
+        output.setTextColor(pal.teal);
         output.setPadding(dp(8), dp(6), dp(8), dp(6));
         // 不设 setTextIsSelectable：外层已经有 ScrollView，长按选字会和滚动打架。
         // 要复制走「复制」按钮，够用。
@@ -744,9 +1057,21 @@ public class FloatingService extends Service {
 
         status = new TextView(this);
         status.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10);
-        status.setTextColor(MUTED);
+        status.setTextColor(pal.muted);
         status.setPadding(dp(2), dp(5), 0, 0);
         root.addView(status);
+
+        // 历史条：横向滚动的一排小胶囊，点一下就回到那次输入。
+        historyBar = new HorizontalScrollView(this);
+        historyBar.setHorizontalScrollBarEnabled(false);
+        LinearLayout.LayoutParams hlp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        hlp.topMargin = dp(6);
+        historyRow = new LinearLayout(this);
+        historyRow.setOrientation(LinearLayout.HORIZONTAL);
+        historyBar.addView(historyRow);
+        root.addView(historyBar, hlp);
+        rebuildHistoryBar();
 
         // 按钮行
         LinearLayout row = new LinearLayout(this);
@@ -760,6 +1085,16 @@ public class FloatingService extends Service {
         row.addView(actionBtn("读剪切板", v -> readClip(false)), weight(1.3f));
         row.addView(actionBtn("分享", v -> shareOutput()), weight(1f));
         row.addView(actionBtn("清空", v -> { input.setText(""); flushRefresh(); }), weight(1f));
+
+        // 第二行：历史相关
+        LinearLayout row2 = new LinearLayout(this);
+        row2.setOrientation(LinearLayout.HORIZONTAL);
+        LinearLayout.LayoutParams r2lp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(32));
+        r2lp.topMargin = dp(4);
+        root.addView(row2, r2lp);
+        row2.addView(actionBtn("清空历史", v -> clearHistory()), weight(1f));
+        row2.addView(actionBtn("面板归位", v -> unpinPanel()), weight(1f));
 
         updateDir();
         refresh();
@@ -777,8 +1112,8 @@ public class FloatingService extends Service {
         TextView tv = new TextView(this);
         tv.setText(label);
         tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
-        tv.setTextColor(MUTED);
-        tv.setBackgroundColor(CARD_HI);
+        tv.setTextColor(pal.muted);
+        tv.setBackgroundColor(pal.cardHi);
         tv.setPadding(dp(9), dp(4), dp(9), dp(4));
         return tv;
     }
@@ -787,12 +1122,36 @@ public class FloatingService extends Service {
         TextView tv = new TextView(this);
         tv.setText(label);
         tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
-        tv.setTextColor(TEXT);
-        tv.setBackgroundColor(CARD_HI);
+        tv.setTextColor(pal.text);
+        tv.setBackgroundColor(pal.cardHi);
         tv.setGravity(Gravity.CENTER);
         tv.setContentDescription(label);
         tv.setOnClickListener(l);
         return tv;
+    }
+
+    /**
+     * 换主题：把已经建好的面板重建成新配色。
+     *
+     * 不直接改每个 View 的颜色 —— 面板里几十个控件，逐个改容易漏；
+     * 重建一份反而更可靠。代价是要把输入内容和方向搬过去。
+     */
+    private void recolorPanel() {
+        if (panel == null) return;
+        String keep = input == null ? "" : input.getText().toString();
+        boolean wasVisible = panelVisible;
+        if (wasVisible) {
+            try { wm.removeView(panel); } catch (Exception ignored) {}
+            panelVisible = false;
+            autoReadPending = false;
+            imeBottom = 0;
+        }
+        panel = null;
+        if (wasVisible) {
+            showPanel();
+            if (input != null && !keep.isEmpty()) input.setText(keep);
+            flushRefresh();
+        }
     }
 
     // ---------- 显示模式 ----------
@@ -818,10 +1177,49 @@ public class FloatingService extends Service {
         }
     }
 
+    /** 方向循环：文字→二进制 → 二进制→文字 → 文字→Base64 → Base64→文字。 */
+    private void cycleDir() {
+        switch (dir) {
+            case DIR_TEXT2BIN: dir = DIR_BIN2TEXT; break;
+            case DIR_BIN2TEXT: dir = DIR_TEXT2B64; break;
+            case DIR_TEXT2B64: dir = DIR_B64TEXT; break;
+            default:           dir = DIR_TEXT2BIN; break;
+        }
+        updateDir();
+        flushRefresh();
+    }
+
+    private String dirLabelText() {
+        switch (dir) {
+            case DIR_BIN2TEXT: return "二进制 → 文字";
+            case DIR_TEXT2B64: return "文字 → Base64";
+            case DIR_B64TEXT: return "Base64 → 文字";
+            default:           return "文字 → 二进制";
+        }
+    }
+
+    private String dirShortLabel(String d) {
+        switch (d) {
+            case DIR_BIN2TEXT: return "2T";
+            case DIR_TEXT2B64: return "B64";
+            case DIR_B64TEXT: return "T64";
+            default:           return "2B";
+        }
+    }
+
+    /** 只有「文字 → 二进制」才需要显示格式（8位/4位/连写/HEX）。 */
+    private boolean usesRenderMode() {
+        return DIR_TEXT2BIN.equals(dir);
+    }
+
     private void updateDir() {
         if (dirLabel == null) return;
-        dirLabel.setText(textToBin ? "文字 → 二进制" : "二进制 → 文字");
-        if (modeBtn != null) modeBtn.setText(modeLabel());
+        dirLabel.setText(dirLabelText());
+        if (modeBtn != null) {
+            modeBtn.setText(modeLabel());
+            // 其它三个方向用不上显示格式，灰掉免得用户以为点了没反应。
+            modeBtn.setTextColor(usesRenderMode() ? pal.muted : pal.cardHi);
+        }
     }
 
     /** 输入防抖：删掉待执行的刷新，立刻算一次（读剪切板/切方向/清空时用）。 */
@@ -842,10 +1240,10 @@ public class FloatingService extends Service {
         if (in.isEmpty()) {
             fullOutput = "";
             output.setText("");
-            status.setText(textToBin ? "输入文字，下方出二进制" : "粘贴 0/1 串，下方出译文");
+            status.setText(emptyHint());
             return;
         }
-        if (textToBin) {
+        if (DIR_TEXT2BIN.equals(dir)) {
             // 文字 -> 二进制方向也要有上限：位串 ≈ 字节数 × 9，
             // 以前这里不设限，粘一篇几百 KB 的文章会生成几十兆字符串、
             // 主线程直接卡死（renderBits 还会再拼一份带空格的）。
@@ -853,7 +1251,7 @@ public class FloatingService extends Service {
             long bitsLen = (long) bytes.length * 8;
             if (bitsLen > BinCore.MAX_BITS) {
                 fullOutput = "";
-                output.setTextColor(ERR);
+                output.setTextColor(pal.err);
                 output.setText("内容太长：" + BinCore.describe(in)
                         + "，转成二进制约 " + bitsLen + " 位，超过上限 "
                         + BinCore.MAX_BITS + " 位。请分段转换。");
@@ -863,20 +1261,55 @@ public class FloatingService extends Service {
             String bits = BinCore.textToBinary(in, true);
             String shown = BinCore.renderBits(bits, renderMode);
             fullOutput = shown;
-            setOutput(shown, TEAL);
+            setOutput(shown, pal.teal);
             status.setText(BinCore.describe(in) + " · " + modeLabel());
-        } else {
-            BinCore.DecodeResult r = BinCore.binaryToText(in);
+        } else if (DIR_TEXT2B64.equals(dir)) {
+            byte[] bytes = in.getBytes(java.nio.charset.Charset.forName("UTF-8"));
+            if ((long) bytes.length > BinCore.MAX_BITS / 8) {
+                fullOutput = "";
+                output.setTextColor(pal.err);
+                output.setText("内容太长：" + BinCore.describe(in) + "，超过上限 "
+                        + (BinCore.MAX_BITS / 8) + " 字节。请分段转换。");
+                status.setText("");
+                return;
+            }
+            String b64 = BinCore.textToBase64(in);
+            fullOutput = b64;
+            setOutput(b64, pal.accent);
+            status.setText(BinCore.describe(in) + " · Base64");
+        } else if (DIR_B64TEXT.equals(dir)) {
+            BinCore.DecodeResult r = BinCore.base64ToText(in);
             if (r.ok) {
                 fullOutput = r.text;
-                setOutput(r.text, TEXT);
+                setOutput(r.text, pal.text);
                 status.setText(r.message);
             } else {
                 fullOutput = "";
                 output.setText("无法解码：" + r.message);
-                output.setTextColor(ERR);
+                output.setTextColor(pal.err);
                 status.setText("");
             }
+        } else {
+            BinCore.DecodeResult r = BinCore.binaryToText(in);
+            if (r.ok) {
+                fullOutput = r.text;
+                setOutput(r.text, pal.text);
+                status.setText(r.message);
+            } else {
+                fullOutput = "";
+                output.setText("无法解码：" + r.message);
+                output.setTextColor(pal.err);
+                status.setText("");
+            }
+        }
+    }
+
+    private String emptyHint() {
+        switch (dir) {
+            case DIR_BIN2TEXT: return "粘贴 0/1 串，下方出译文";
+            case DIR_TEXT2B64: return "输入文字，下方出 Base64";
+            case DIR_B64TEXT: return "粘贴 Base64，下方出译文";
+            default:           return "输入文字，下方出二进制";
         }
     }
 
@@ -898,6 +1331,7 @@ public class FloatingService extends Service {
                 ? (output == null ? "" : output.getText().toString())
                 : fullOutput;
         if (s.isEmpty()) { toast("没有可复制的内容"); return; }
+        recordHistory(input == null ? "" : input.getText().toString());
         // 截断前先把「原本超没超」记下来：截断后长度正好等于上限，
         // 原来那句 `if (s.length() <= MAX_COPY_CHARS) toast("已复制")` 依然成立，
         // 于是「内容过大…」后面紧跟一句「已复制」，两条 toast 打架。
@@ -976,14 +1410,17 @@ public class FloatingService extends Service {
             if (silent && text.equals(lastClip)) return;
             lastClip = text;
             // 自动判断方向，但用户手动按过 ⇄ 之后以用户为准。
-            String dir = BinCore.autoDetect(text);
-            if (!dirPinnedByUser && !"unknown".equals(dir)) {
-                textToBin = "bin2text".equals(dir);
+            String auto = BinCore.autoDetect(text);
+            if (!dirPinnedByUser) {
+                if ("bin2text".equals(auto)) dir = DIR_BIN2TEXT;
+                else if ("b64text".equals(auto)) dir = DIR_B64TEXT;
+                else if ("text2bin".equals(auto)) dir = DIR_TEXT2BIN;
             }
             input.setText(text);
             updateDir();
             flushRefresh();
-            if (!silent) toast(textToBin ? "已转成二进制" : "已译成文字");
+            recordHistory(text);
+            if (!silent) toast(dirLabelText() + "：已填入");
         } catch (Exception e) {
             if (!silent) toast("读取剪切板失败：" + e.getMessage());
         }

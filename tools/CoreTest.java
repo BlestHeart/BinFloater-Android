@@ -108,6 +108,56 @@ public class CoreTest {
         eq("八位分组", BinCore.groupBits("0100100001101001", 8, " "), "01001000 01101001");
         eq("四位分组", BinCore.groupBits("0100100001101001", 4, "-"), "0100-1000-0110-1001");
 
+        System.out.println("== 9. Base64 编解码 ==");
+        eq("ASCII 编码", BinCore.textToBase64("Hi"), "SGk=");
+        eq("中文编码", BinCore.textToBase64("你好"), "5L2g5aW9");
+        eq("空串编码", BinCore.textToBase64(""), "");
+        eq("null 编码", BinCore.textToBase64(null), "");
+        eq("ASCII 解码", BinCore.base64ToText("SGk=").text, "Hi");
+        eq("中文解码", BinCore.base64ToText("5L2g5aW9").text, "你好");
+        eq("emoji 解码", BinCore.base64ToText("8J+Zgg==").text, "🙂");
+        check("解码成功标记", BinCore.base64ToText("SGk=").ok);
+        check("解码消息含字节数", BinCore.base64ToText("SGk=").message.contains("2 字节"));
+
+        System.out.println("== 9b. Base64 往返 ==");
+        String[] b64samples = {"你好世界", "Hello 世界 🙂", "a", "混合 mixed 123", "！@#￥%…"};
+        for (String s : b64samples) {
+            String enc = BinCore.textToBase64(s);
+            eq("往返 [" + s + "]", BinCore.base64ToText(enc).text, s);
+        }
+
+        System.out.println("== 9c. Base64 容错 ==");
+        // 缺 padding：很多地方（JWT、URL）不写 =，要能补齐
+        eq("缺 padding 能解", BinCore.base64ToText("SGk").text, "Hi");
+        // 带空白/换行：从文档里复制常带换行
+        eq("带换行能解", BinCore.base64ToText("SGk=\n").text, "Hi");
+        eq("带空格能解", BinCore.base64ToText("5L2g 5aW9").text, "你好");
+        // URL 安全字母表：- 和 _ 要换回 + 和 /
+        eq("URL 安全字母表", BinCore.base64ToText("8J-Zgg==").text, "🙂");
+        check("非法字符被拒", !BinCore.base64ToText("SGk=!!").ok);
+        check("空输入被拒", !BinCore.base64ToText("").ok);
+        check("null 被拒", !BinCore.base64ToText(null).ok);
+
+        System.out.println("== 9d. Base64 判定不误伤 ==");
+        // 这是 Base64 判定的核心难点：字母表就是普通英文，
+        // 任何 4 个字母都能「解」出 3 个字节。判据必须是「解出来的像不像文本」。
+        check("test 不判为 Base64", !BinCore.looksLikeBase64("test"));
+        check("HelloWorld 不判为 Base64", !BinCore.looksLikeBase64("HelloWorld"));
+        check("普通中文不判为 Base64", !BinCore.looksLikeBase64("这是一段普通文字"));
+        check("二进制串不判为 Base64", !BinCore.looksLikeBase64("0100100001101001"));
+        check("短串不判为 Base64", !BinCore.looksLikeBase64("SGk="));
+        check("中文 Base64 能判定", BinCore.looksLikeBase64("5L2g5aW9"));
+        check("emoji Base64 能判定", BinCore.looksLikeBase64("8J+Zgg=="));
+        eq("autoDetect Base64", BinCore.autoDetect("5L2g5aW9"), "b64text");
+        eq("autoDetect 仍优先二进制", BinCore.autoDetect("0100100001101001"), "bin2text");
+
+        System.out.println("== 9e. 位串 -> Base64 ==");
+        eq("位串转 Base64", BinCore.bitsToBase64("0100100001101001"), "SGk=");
+        eq("位串带空格转 Base64", BinCore.bitsToBase64("01001000 01101001"), "SGk=");
+        eq("renderBits base64", BinCore.renderBits("0100100001101001", "base64"), "SGk=");
+        eq("renderBits 未知模式兜底",
+                BinCore.renderBits("0100100001101001", "nonsense"), "01001000 01101001");
+
         System.out.println();
         System.out.println("结果：通过 " + pass + " 项，失败 " + fail + " 项");
         if (fail > 0) System.exit(1);
