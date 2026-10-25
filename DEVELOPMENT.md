@@ -320,6 +320,9 @@ signing/
   README.md                    密钥说明（密钥本身不进 git）
 build.sh                       手工构建
 run_tests.sh                   一键回归
+README.md                      项目首页（面向使用者）
+DEVELOPMENT.md                 本文件（面向开发者）
+CHANGELOG.md                   更新日志（每个版本改了什么）
 ```
 
 ---
@@ -333,7 +336,7 @@ run_tests.sh                   一键回归
 | 源码、资源、清单 | `build/` 全部中间产物 |
 | `build.sh` / `run_tests.sh` | `dist/*.apk`（纯二进制，dex 一变整份存） |
 | `tools/` 下测试与脚本 | `signing/*.keystore`（签名密钥） |
-| `README.md` / `DEVELOPMENT.md` / `LICENSE` | `.idea/`、`.vscode/`、`__pycache__/` |
+| `README.md` / `DEVELOPMENT.md` / `CHANGELOG.md` / `LICENSE` | `.idea/`、`.vscode/`、`__pycache__/` |
 
 **`dist/*.apk` 不进 git 的理由**：APK 是纯二进制，dex 一改整个文件就变，git 整份存储。几十个版本就是几百 MB。要发布用 GitHub Releases 挂附件。
 
@@ -400,7 +403,7 @@ v2.0 的改动：
 | APK 大小 | 8.1 MB | 29 KB |
 | `classes.dex` | 105 KB | 29 KB |
 | 源文件 | 9 个 | 3 个 |
-| 测试断言 | 467 项 | 208 项 |
+| 测试断言 | 467 项 | 80 项（当前 208） |
 | 权限 | 6 个（含 INTERNET） | 4 个 |
 
 输入法代码全部在 git 历史里（v1.2 的 tag/commit），需要的话能翻出来。
