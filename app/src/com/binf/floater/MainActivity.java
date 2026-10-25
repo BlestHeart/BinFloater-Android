@@ -32,9 +32,20 @@ public class MainActivity extends Activity {
     private TextView statusView;
     private TextView permView;
     private LinearLayout root;
+    /** buildUi 里那个外层 ScrollView，重建界面时用它保住滚动位置。 */
+    private ScrollView rootScroll;
     private Switch floatingSwitch;
     /** 回填开关状态时置位，避免 setChecked() 反过来触发监听器。 */
     private boolean syncingSwitch = false;
+    /**
+     * 刚点了「开」、服务还没起来的这段时间。
+     *
+     * 服务从 startForegroundService 到 onCreate 里把 running 置 true 之间有个空档，
+     * 这期间 isRunning() 还是 false。若用户在 300ms 内切出去再回来，
+     * onResume 的 syncEnabledPref() 会照着 false 把 prefs 写回去 ——
+     * 开关显示「关」，可球其实已经出来了，两边打架。
+     */
+    private long pendingStartUntil = 0L;
     /** 当前配色，buildUi 时从 Palette 取一次。 */
     private Palette pal;
 
@@ -98,6 +109,8 @@ public class MainActivity extends Activity {
 
     /** 把 prefs 里那份「应该开着」对齐到服务的真实状态，避免下次冷启动被陈旧值误导。 */
     private void syncEnabledPref() {
+        // 刚拨开开关、服务还没 onCreate 完，这段时间别照着 isRunning()=false 写 prefs。
+        if (System.currentTimeMillis() < pendingStartUntil) return;
         boolean actual = FloatingService.isRunning();
         if (prefs.getBoolean("floating_enabled", false) != actual) {
             prefs.edit().putBoolean("floating_enabled", actual).apply();
@@ -107,6 +120,7 @@ public class MainActivity extends Activity {
     private View buildUi() {
         ScrollView scroll = new ScrollView(this);
         scroll.setBackgroundColor(pal.bg);
+        rootScroll = scroll;
 
         root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
@@ -348,7 +362,7 @@ public class MainActivity extends Activity {
         v = Math.max(0, Math.min(2, v));
         prefs.edit().putInt("bubble_scale", v).apply();
         applyLookToService();
-        setContentView(buildUi());
+        rebuildUiKeepingScroll();
         refreshStatus();
     }
 
@@ -357,16 +371,37 @@ public class MainActivity extends Activity {
         v = Math.max(0, Math.min(3, v));
         prefs.edit().putInt("bubble_alpha", v).apply();
         applyLookToService();
-        setContentView(buildUi());
+        rebuildUiKeepingScroll();
         refreshStatus();
+    }
+
+    /**
+     * 重建界面但保住滚动位置。
+     *
+     * 点「球大一点 / 更透明」要立刻看到按钮上的新档位，只能重建 UI；
+     * 但直接 setContentView(buildUi()) 会把滚动位置打回顶部，
+     * 用户在外观区连点几下就得反复往下滚。
+     */
+    private void rebuildUiKeepingScroll() {
+        int y = rootScroll == null ? 0 : rootScroll.getScrollY();
+        setContentView(buildUi());
+        if (rootScroll != null) {
+            final int keep = y;
+            rootScroll.post(() -> rootScroll.scrollTo(0, keep));
+        }
     }
 
     /**
      * 外观改了就通知服务立刻生效。
      * 用 SHOW_PANEL 会顺手把面板弹出来，这里不合适，所以复用 ACTION_STOP 之外的
      * 那个「只重读外观」的动作 —— 服务里 onStartCommand 收到它只刷球样式。
+     *
+     * 必须先判 isRunning()：悬浮窗关着的时候 startService 会把服务**新建**出来，
+     * 于是点一下「球大一点 / 配色 / 清空转换历史」就凭空冒出悬浮球和常驻通知，
+     * 开关却还显示着「关」—— 用户会以为中病毒了。
      */
     private void applyLookToService() {
+        if (!FloatingService.isRunning()) return;
         try {
             Intent i = new Intent(this, FloatingService.class)
                     .setAction(FloatingService.ACTION_REFRESH_LOOK);
@@ -380,21 +415,13 @@ public class MainActivity extends Activity {
         pal = Palette.get(this);
         setContentView(buildUi());
         refreshStatus();
-        // 悬浮窗是另一个进程里的视图，得叫它自己重画。
-        try {
-            startService(new Intent(this, FloatingService.class)
-                    .setAction(FloatingService.ACTION_REFRESH_LOOK));
-        } catch (Exception ignored) {
-        }
+        // 悬浮窗是同一个进程里的窗口视图，叫它自己重画一遍。
+        applyLookToService();
     }
 
     private void clearHistory() {
         prefs.edit().putString("history", "").apply();
-        try {
-            startService(new Intent(this, FloatingService.class)
-                    .setAction(FloatingService.ACTION_REFRESH_LOOK));
-        } catch (Exception ignored) {
-        }
+        applyLookToService();
         toast("转换历史已清空");
     }
 
@@ -525,6 +552,9 @@ public class MainActivity extends Activity {
     private void startFloating() {
         try {
             startForegroundService(new Intent(this, FloatingService.class));
+            // 服务起来之前 isRunning() 还是 false，先记一个宽限期，
+            // 期间 onResume 不要拿 false 去覆盖 prefs。
+            pendingStartUntil = System.currentTimeMillis() + 2000L;
             // 不再立刻报「已开启」：服务可能随后因权限/窗口错误自毁，
             // 两条 toast 会互相打脸。状态交给 refreshStatus() 读事实。
             toast("正在开启悬浮窗…");

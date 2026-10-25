@@ -60,12 +60,12 @@ d8 --min-api 34 --output build/dex build/classes/**/*.class
 bash run_tests.sh
 ```
 
-两组共累计 186 项：
+两组共累计 191 项：
 
 | 组 | 项数 | 测什么 |
 |---|---|---|
-| 编解码核心 | 87 | `BinCore` 的双向转换、分隔符、编码回退、阈值判定、长度上限、hex 不截断、Base64 编解码与判定 |
-| 静态审查 | 99 | 读源码做约束检查（见下） |
+| 编解码核心 | 90 | `BinCore` 的双向转换、分隔符、编码回退、阈值判定、长度上限、hex 不截断、Base64 编解码与判定 |
+| 静态审查 | 101 | 读源码做约束检查（见下） |
 
 ### 为什么有「静态审查」这一组
 
@@ -172,7 +172,7 @@ onDestroy() → setEnabledPref(false)
 回填开关时有个副作用要防：`setChecked()` 会触发 `OnCheckedChangeListener`，不屏蔽的话
 一次「同步状态」会顺带再 start/stop 一次服务。用 `syncingSwitch` 标志位挡住。
 
-静态审查加 52 项守着（47 → 99，含本轮修掉的 17 个 bug 的回归断言，以及球外观 / 历史 / 面板拖动 / Base64 / 主题的约束）。
+静态审查加 52 项守着（47 → 101，含本轮修掉的 17 个 bug 与 16 条复审问题的回归断言，以及球外观 / 历史 / 面板拖动 / Base64 / 主题 / 历史转义的约束）。
 
 ### 方向自动识别
 
@@ -254,8 +254,8 @@ app/
     MainActivity.java          设置界面（主题 / 历史 / 球外观）
     Palette.java               深浅色两套调色板
 tools/
-  CoreTest.java                87 项编解码测试
-  StaticAudit.java             99 项源码约束检查
+  CoreTest.java                90 项编解码测试
+  StaticAudit.java             101 项源码约束检查
   push_github.sh               推送脚本
 signing/
   README.md                    密钥说明（密钥本身不进 git）
@@ -331,7 +331,7 @@ v2.0 的改动：
 | APK 大小 | 8.1 MB | 29 KB |
 | `classes.dex` | 105 KB | 29 KB |
 | 源文件 | 9 个 | 3 个 |
-| 测试断言 | 467 项 | 186 项 |
+| 测试断言 | 467 项 | 191 项 |
 | 权限 | 6 个（含 INTERNET） | 4 个 |
 
 输入法代码全部在 git 历史里（v1.2 的 tag/commit），需要的话能翻出来。
@@ -367,6 +367,44 @@ v2.0 的改动：
 **7. 回归测试假绿**
 
 编译失败时一行测试没跑，`pass=0 fail=0`，脚本仍然打印「全通过」。修法：`run()` 同时校验退出码和断言数下限。
+
+### 第二轮审计（v2.2 之后）修掉的 16 条
+
+这轮是让子 agent 只读通读四个源文件查出来的，有几条是自己写的时候完全没意识到的：
+
+**1. 面板拖动从来没生效过** —— `setupPanelDrag` 的 `ACTION_DOWN` 返回 `false`，而 `head` 是不可点击的 `LinearLayout`、又嵌在 `ScrollView` 里：DOWN 没人消费就被 ScrollView 拿去当滚动起点，后续 MOVE 全被 `onInterceptTouchEvent` 截走，`head` 只收到 `ACTION_CANCEL`。对比悬浮球能拖 —— 它有 `setOnClickListener` 所以 clickable，`onTouchEvent` 返回 true 才收得到 MOVE。**修法：DOWN 直接 `return true`**；标题栏里的按钮自己是 clickable，会先消费 DOWN，不受影响。
+
+**2. 悬浮窗关着时点外观按钮会凭空启动服务** —— `applyLookToService()` 直接 `startService(ACTION_REFRESH_LOOK)`，服务没跑时系统会新建实例，`onCreate` 里 `setEnabledPref(true)` + `startForegroundSafe()` + `createBubble()`。于是点一下「球大一点」就冒出悬浮球和常驻通知，开关却还显示「关」。**修法：先判 `isRunning()` 再发 Intent。**
+
+**3. 换主题时剪切板覆盖用户手打的内容** —— `recolorPanel()` 把 panel 置 null 后调 `showPanel()`，`showPanel` 无条件 `autoReadPending = true` 并 120ms 后读剪切板；`recolorPanel` 随后才 `input.setText(keep)` 恢复内容，120ms 后又被剪切板整段替换。**修法：加 `suppressAutoReadOnce` 标志，内部重建时不读。**
+
+**4. 点一次历史胶囊，自动识别方向永久失效** —— chip 的 onClick 里 `dirPinnedByUser = true`，而 `readClip` 的自动判定包在 `if (!dirPinnedByUser)` 里，该标志在全服务生命周期内再不复位。之后每复制一段新内容都按旧方向转，面板显示「无法解码」。**修法：`hidePanel()` 里复位 —— 「用户手动选的方向」只对本次面板有效。**
+
+**5. 球贴边后调大，右半超出屏幕** —— `relayoutBubble()` 先 `clampBubble()`，而 clamp 用 `bubbleW()`：`bubble.getWidth()` 此刻还是**旧宽度**（`setPadding`/`setTextSize` 只是 requestLayout，下一帧才重排）。**修法：`bubble.post()` 再夹一次。**
+
+**6. Base64 判定和解码口径不一致** —— `looksLikeBase64` 用**原始长度**卡 `% 4`，而 `base64ToBytes` 走 `normalizeBase64` 会自动补 padding，于是 `SGVsbG8`（7 字符）自动识别认不出、手动解码又能解。而且判定没有长度上限，超长串被判成 `b64text` 后解码只报「内容过长」。**修法：判定统一用补齐后的长度，并和 `base64ToText` 一样卡 `MAX_BITS/8` 字节；同时只解一次（原来 probe 解一遍、正式再解一遍，长串在主线程白解两遍）。**
+
+**7. 读剪切板无长度上限** —— 几百 KB 文本整段塞进 EditText，再同步跑 `cleanBits` 的正则替换和 Base64 试探解码，全在主线程。**修法：截到 `MAX_CLIP_CHARS = 50000` 并明确提示被截断；超过 `MAX_AUTODETECT_CHARS = 20000` 直接按「文字 → 二进制」处理，不做自动识别。**
+
+**8. 面板夹到 62% 高度后永远缩不回去** —— 只在「变高」时把 `lp.height` 钉成 cap，之后 `panel.getHeight()` 恒等于 cap，条件 `h > cap` 永远不成立，清空输入后仍是一块 62% 屏高的空壳。**修法：内容缩回 cap 以内时把高度改回 `WRAP_CONTENT`。**
+
+**9. 历史条目分隔符没转义** —— 条目用 `dir + "\u0002" + 内容` 拼接、整体用 `\u0001` 分隔。用户从别的 App 复制来带这两个控制字符的内容时，`split` 会把一条拆成几条，chip 的 `indexOf('\u0002')` 也切错位置。**修法：`escapeHist()` / `unescapeHist()`，把 `\` `\u0001` `\u0002` 都转义掉。**
+
+**10. 清空历史后一收面板又冒出一条** —— `hidePanel()` 无条件 `recordHistory(当前输入)`，把刚清掉的又写回去。**修法：`skipHistoryOnHide` 标志。**
+
+**11. 浅色主题下悬浮球几乎看不见** —— 球背景取 `withAlpha(pal.bg, ...)`，浅色 `pal.bg` = `0xFFF4F6FB`（近白），叠在浅色桌面上没有描边、没有对比。**修法：改用 `GradientDrawable` 画圆角 + 一圈 `withAlpha(pal.accent, 55)` 描边，任何壁纸上都能看出轮廓。**
+
+**12. 刚开开关又立刻切回前台，prefs 被写成 false** —— 服务从 `startForegroundService` 到 `onCreate` 把 `running` 置 true 之间有空档，这期间 `isRunning()` 还是 false；`onResume` 的 `syncEnabledPref()` 照着 false 写回 prefs，开关显示「关」可球已经出来了。**修法：`pendingStartUntil` 宽限期，期间不覆盖 prefs。**
+
+**13. 外观按钮整页重建丢滚动位置** —— 每点一次「球大一点」就 `setContentView(buildUi())`，滚动位置打回顶部。**修法：`rebuildUiKeepingScroll()` 记下 `getScrollY()`，重建后 `post` 回去。**
+
+**14. `renderBits` 支持 `base64` 档但 UI 循环里没有它** —— prefs 里遗留/被外部写成 `base64` 时，输出是 Base64、按钮却显示「8位」，点一下就被转回 `group8`。**修法：`cycleRenderMode` 补第五档，`modeLabel` 加 `"B64"`。**
+
+**15. 历史截断 120 字符后回填失真** —— 用户以为点回来的是原文，实际只有前 120 字符。**修法：chip 上标省略号，并在 README「已知限制」里写明。**
+
+**16. 开关回填与 `onResume` 竞态**（同 12 的另一个入口）—— 一并由 `pendingStartUntil` 兜住。
+
+**这轮的教训**：静态审查 101 项全是 `contains` 字符串匹配，**上面一条也测不出**。字符串断言能守「结构不能变」，守不住「行为对不对」。像「DOWN 返回 true/false」「先 clamp 还是先重排」这种顺序问题，只有通读代码或真机才能发现。所以流程改成：改完代码先让子 agent 只读通读一遍，再自己逐条核对行号，最后才跑测试。
 
 ---
 

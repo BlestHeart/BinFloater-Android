@@ -80,6 +80,19 @@ public class FloatingService extends Service {
     private static final int LONG_PRESS_MS = 450;
     /** 点外面收起面板后，这么短时间内忽略气泡点击，否则会「收了又开」。 */
     private static final int SUPPRESS_TOGGLE_MS = 350;
+    /**
+     * 从剪切板读进来的内容最多取多少字符。
+     *
+     * 以前没有上限：几百 KB 的文本会被整段 setText 进 EditText，随后在
+     * readClip 里同步跑 cleanBits 的正则替换、Base64 试探解码、方向判定 ——
+     * 全在主线程，足以卡出 ANR。
+     */
+    private static final int MAX_CLIP_CHARS = 50000;
+    /**
+     * 超过这个长度就不做「自动识别方向」，直接按文字处理。
+     * 自动识别要跑正则 + Base64 试探解码，长文本在主线程上是纯浪费。
+     */
+    private static final int MAX_AUTODETECT_CHARS = 20000;
 
     // ---------- 转换方向 ----------
     private static final String DIR_TEXT2BIN = "text2bin";
@@ -154,6 +167,14 @@ public class FloatingService extends Service {
     private Handler handler;
     /** 打开面板时自动读一次剪切板的标记，避免面板重绘时反复读。 */
     private boolean autoReadPending = false;
+    /**
+     * 下一次 showPanel 不要自动读剪切板。
+     * 换主题时面板要被拆了重建，重建后如果照常自动读，剪切板里那段东西
+     * 就会盖掉用户手打的内容（用户只是换了配色，没想换内容）。
+     */
+    private boolean suppressAutoReadOnce = false;
+    /** 刚点过「清空历史」：下次 hidePanel 不要再把当前输入写回历史。 */
+    private boolean skipHistoryOnHide = false;
     private final Runnable refreshRunnable = new Runnable() {
         @Override public void run() { refresh(); }
     };
@@ -376,6 +397,10 @@ public class FloatingService extends Service {
     /**
      * 把当前的大小档 / 不透明度 / 配色套到球上。
      * 调完要重新 updateViewLayout，否则窗口尺寸不会跟着变。
+     *
+     * 背景不用 setBackgroundColor 而是画一个圆角 + 描边的 GradientDrawable：
+     * 浅色主题下 pal.bg 接近白色，球叠在浅色桌面上就糊成一片、看不出边界，
+     * 用户以为悬浮球丢了。加一圈比背景暗的描边，任何壁纸上都能看出轮廓。
      */
     private void applyBubbleStyle() {
         if (bubble == null) return;
@@ -383,8 +408,16 @@ public class FloatingService extends Service {
         int padH = dp(10 * s);
         int padV = dp(8 * s);
         bubble.setPadding(padH, padV, padH, padV);
-        bubble.setBackgroundColor(withAlpha(pal.bg,
-                BUBBLE_ALPHAS[clamp(bubbleAlpha, 0, BUBBLE_ALPHAS.length - 1)]));
+        int fill = withAlpha(pal.bg,
+                BUBBLE_ALPHAS[clamp(bubbleAlpha, 0, BUBBLE_ALPHAS.length - 1)]);
+        GradientDrawable bgShape = new GradientDrawable();
+        bgShape.setShape(GradientDrawable.RECTANGLE);
+        bgShape.setColor(fill);
+        bgShape.setCornerRadius(dp(14) * s);
+        // 描边用 accent 的淡色：深色主题下是浅蓝、浅色主题下是深蓝，
+        // 两种背景下都有对比度，又不会像纯黑描边那样脏。
+        bgShape.setStroke(Math.max(1, dp(1.5f)), withAlpha(pal.accent, 55));
+        bubble.setBackground(bgShape);
         if (bubbleMark != null) {
             bubbleMark.setTextSize(TypedValue.COMPLEX_UNIT_SP, 18 * s);
             bubbleMark.setTextColor(pal.teal);
@@ -502,7 +535,13 @@ public class FloatingService extends Service {
                         startX = panelLp.x;
                         startY = panelLp.y;
                         moved = false;
-                        return false;
+                        // 必须吃掉 DOWN。以前这里 return false，而 head 是不可点击的
+                        // LinearLayout、又嵌在 ScrollView 里：DOWN 没人消费就被 ScrollView
+                        // 拿去当滚动起点，后续 MOVE 全被 ScrollView 的
+                        // onInterceptTouchEvent 截走，head 只收到 CANCEL ——
+                        // 面板拖动从来就没生效过，拖标题栏只会滚面板内容。
+                        // 标题栏里的按钮自己是 clickable，会先消费 DOWN，不受影响。
+                        return true;
                     case MotionEvent.ACTION_MOVE: {
                         float dx = e.getRawX() - downX;
                         float dy = e.getRawY() - downY;
@@ -529,11 +568,14 @@ public class FloatingService extends Service {
                                         .putInt("panel_y", panelY).apply();
                             } catch (Exception ignored) {}
                             view.setPressed(false);
-                            return true;
                         }
-                        return false;
+                        // DOWN 已经被吃掉了，UP 也必须吃掉：放回去会让 View 以为
+                        // 手势中途丢了，进而把这次按下判成一次点击。
+                        return true;
                     default:
-                        return false;
+                        // CANCEL 之类：把状态复位，别让下一段手势接着上一段的 moved。
+                        moved = false;
+                        return true;
                 }
             }
         });
@@ -624,8 +666,14 @@ public class FloatingService extends Service {
                 return insets;
             });
             // 面板刚拿到焦点，剪切板这时才读得到。等一小会儿再读。
-            autoReadPending = true;
-            handler.postDelayed(this::readClipIfPending, CLIP_DELAY_MS);
+            // 但「内部重建」（换主题 recolorPanel）不能读：那时面板里还有用户
+            // 手打的内容，读一次剪切板就把人家写的整段替换掉了。
+            if (suppressAutoReadOnce) {
+                suppressAutoReadOnce = false;
+            } else {
+                autoReadPending = true;
+                handler.postDelayed(this::readClipIfPending, CLIP_DELAY_MS);
+            }
             // 高度可能超出屏幕（长文本），量完再夹一次。
             panel.post(this::capPanelHeight);
         } catch (Exception e) {
@@ -633,14 +681,29 @@ public class FloatingService extends Service {
         }
     }
 
-    /** 面板高度不超过屏幕 62%，超出部分靠面板内部滚动。 */
+    /**
+     * 面板高度不超过屏幕 62%，超出部分靠面板内部滚动。
+     *
+     * 而且**能缩回去**：以前只在「变高」时把 lp.height 钉成 cap，
+     * 之后 panel.getHeight() 恒等于 cap，条件 h > cap 永远不成立，
+     * 于是清空输入后面板还是一块 62% 屏高的空壳，缩不回去。
+     */
     private void capPanelHeight() {
         if (!panelVisible || panel == null || panelLp == null) return;
         int cap = (int) (screenH() * 0.62);
         int h = panel.getHeight();
-        if (h > cap && panelLp.height != cap) {
-            panelLp.height = cap;
-            try { wm.updateViewLayout(panel, panelLp); } catch (Exception ignored) {}
+        if (h > cap) {
+            if (panelLp.height != cap) {
+                panelLp.height = cap;
+                try { wm.updateViewLayout(panel, panelLp); } catch (Exception ignored) {}
+            }
+        } else if (panelLp.height == cap && panel.getChildCount() > 0) {
+            // 内容已经缩回 cap 以内 —— 把固定高度改回 WRAP_CONTENT，让面板自己收。
+            int content = panel.getChildAt(0).getHeight();
+            if (content > 0 && content <= cap) {
+                panelLp.height = WindowManager.LayoutParams.WRAP_CONTENT;
+                try { wm.updateViewLayout(panel, panelLp); } catch (Exception ignored) {}
+            }
         }
         syncPanelPos();
     }
@@ -691,11 +754,20 @@ public class FloatingService extends Service {
     private void hidePanel() {
         if (panelVisible && panel != null) {
             // 收起前把当前输入记进历史，省得用户手打的内容丢在面板里。
-            recordHistory(input == null ? "" : input.getText().toString());
+            // 刚点过「清空历史」就别记了 —— 否则一收面板又冒出一条，
+            // 用户点了个「清空」却看见列表里还有东西，会以为没清掉。
+            if (!skipHistoryOnHide) {
+                recordHistory(input == null ? "" : input.getText().toString());
+            }
+            skipHistoryOnHide = false;
             try { wm.removeView(panel); } catch (Exception ignored) {}
             panelVisible = false;
             autoReadPending = false;
             imeBottom = 0;
+            // 收起面板就结束「这一轮」：用户手动按过的方向只对本次有效，
+            // 下次打开重新自动识别。否则点过一次 ⇄ 或历史胶囊之后，
+            // 自动识别在整个服务生命周期里都失效，新复制的二进制会被按文字转。
+            dirPinnedByUser = false;
             // 只清「还没执行的防抖刷新」，不能清全部消息。
             // 以前用 removeCallbacksAndMessages(null)，把 refreshRunnable 一起清了，
             // 而重开面板时 panel != null 又不会再 buildPanel/refresh，
@@ -835,6 +907,15 @@ public class FloatingService extends Service {
         clampBubble();
         try { wm.updateViewLayout(bubble, bubbleLp); } catch (Exception ignored) {}
         if (panelVisible) syncPanelPos();
+        // 换尺寸后要等下一帧重排完，bubble.getWidth() 才是新宽度。
+        // 不补这一次：球贴右边缘时调大，clamp 用的还是旧（小）宽度，
+        // 夹完窗口变宽、x 不变，球的右半边直接跑到屏幕外。
+        bubble.post(() -> {
+            if (bubble == null || bubbleLp == null || wm == null) return;
+            clampBubble();
+            try { wm.updateViewLayout(bubble, bubbleLp); } catch (Exception ignored) {}
+            if (panelVisible) syncPanelPos();
+        });
     }
 
     // ---------- 历史 ----------
@@ -864,13 +945,17 @@ public class FloatingService extends Service {
     /**
      * 记一条历史。存的是「输入原文」，不是输出 —— 输出可以随时重算，
      * 而用户真正想找回来的是「刚才那段文字/那串 0/1」。
+     *
+     * 条目格式：dir + '\u0002' + 转义后的原文。两个分隔符（\u0001 存条目、
+     * \u0002 存方向）都可能出现在用户内容里（从别的 App 复制来的二进制数据），
+     * 所以内容必须先转义，否则 split 会把一条拆成几条、chip 也会切错位置。
      */
     private void recordHistory(String text) {
         if (text == null) return;
         String t = text.trim();
         if (t.isEmpty()) return;
-        if (t.length() > MAX_HISTORY_CHARS) t = t.substring(0, MAX_HISTORY_CHARS) + "…";
-        String entry = dir + "\u0002" + t;
+        if (t.length() > MAX_HISTORY_CHARS) t = t.substring(0, MAX_HISTORY_CHARS);
+        String entry = dir + '\u0002' + escapeHist(t);
         // 和最近一条重复就不重复记（来回切面板不该刷出一堆同样的条目）。
         if (!history.isEmpty() && history.peekFirst().equals(entry)) return;
         history.remove(entry);
@@ -880,10 +965,42 @@ public class FloatingService extends Service {
         rebuildHistoryBar();
     }
 
+    /** 把分隔符和转义符自己转义掉，保证一条历史永远是「一条」。 */
+    private static String escapeHist(String s) {
+        StringBuilder sb = new StringBuilder(s.length() + 8);
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            if (c == '\\') sb.append("\\\\");
+            else if (c == '\u0001') sb.append("\\1");
+            else if (c == '\u0002') sb.append("\\2");
+            else sb.append(c);
+        }
+        return sb.toString();
+    }
+
+    private static String unescapeHist(String s) {
+        StringBuilder sb = new StringBuilder(s.length());
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            if (c == '\\' && i + 1 < s.length()) {
+                char n = s.charAt(++i);
+                if (n == '1') sb.append('\u0001');
+                else if (n == '2') sb.append('\u0002');
+                else sb.append(n);
+            } else {
+                sb.append(c);
+            }
+        }
+        return sb.toString();
+    }
+
     private void clearHistory() {
         history.clear();
         saveHistory();
         rebuildHistoryBar();
+        // 清完历史后一收面板又会被 hidePanel 写回一条当前输入，
+        // 用户会以为「清空」没生效。
+        skipHistoryOnHide = true;
         toast("历史已清空");
     }
 
@@ -903,9 +1020,12 @@ public class FloatingService extends Service {
         for (String entry : history) {
             int sep = entry.indexOf('\u0002');
             String d = sep < 0 ? DIR_TEXT2BIN : entry.substring(0, sep);
-            String text = sep < 0 ? entry : entry.substring(sep + 1);
+            String text = unescapeHist(sep < 0 ? entry : entry.substring(sep + 1));
             TextView chip = new TextView(this);
             chip.setText(dirShortLabel(d) + " " + text.replace('\n', ' '));
+            // 历史里存的是截断后的内容（最多 120 字符），点回来也只会是这 120 字符。
+            // 在长条上标个省略号，别让用户以为点一下能拿回整篇。
+            if (text.length() >= MAX_HISTORY_CHARS) chip.setText(chip.getText() + "…");
             chip.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10);
             chip.setTextColor(pal.accent);
             chip.setBackgroundColor(pal.cardHi);
@@ -1148,8 +1268,15 @@ public class FloatingService extends Service {
         }
         panel = null;
         if (wasVisible) {
+            // 重建是「同一个面板换了身衣服」，不是重新打开 —— 别再读一次剪切板，
+            // 否则用户手打的内容会被剪切板里的东西整段顶掉。
+            suppressAutoReadOnce = true;
             showPanel();
-            if (input != null && !keep.isEmpty()) input.setText(keep);
+            if (input != null && !keep.isEmpty()) {
+                input.setText(keep);
+                // setText 会把光标丢到开头，重建后接着在末尾输入更符合直觉。
+                input.setSelection(input.getText().length());
+            }
             flushRefresh();
         }
     }
@@ -1161,6 +1288,7 @@ public class FloatingService extends Service {
             case "group8":  renderMode = "group4";  break;
             case "group4":  renderMode = "compact"; break;
             case "compact": renderMode = "hex";     break;
+            case "hex":     renderMode = "base64";  break;
             default:        renderMode = "group8";  break;
         }
         try { prefs().edit().putString("render_mode", renderMode).apply(); } catch (Exception ignored) {}
@@ -1173,6 +1301,10 @@ public class FloatingService extends Service {
             case "group4":  return "4位";
             case "compact": return "连写";
             case "hex":     return "HEX";
+            // renderBits 一直支持 "base64" 档，但循环和按钮文字里没有它：
+            // prefs 里遗留/被外部写成 base64 时，输出是 Base64、按钮却显示「8位」，
+            // 而且点一下就被转回 group8。补上第五档，UI 和渲染能力对齐。
+            case "base64":  return "B64";
             default:        return "8位";
         }
     }
@@ -1326,6 +1458,17 @@ public class FloatingService extends Service {
         }
     }
 
+    /**
+     * 按字符数截断，但不把 emoji（代理对）切成半个。
+     * 单独抽出来是因为剪切板读入、显示截断、复制截断都要用同一套规则。
+     */
+    private static String safeSubstring(String s, int limit) {
+        if (s == null || s.length() <= limit) return s;
+        int cut = limit;
+        if (cut > 0 && Character.isHighSurrogate(s.charAt(cut - 1))) cut--;
+        return s.substring(0, cut);
+    }
+
     private void copyOutput() {
         String s = fullOutput == null || fullOutput.isEmpty()
                 ? (output == null ? "" : output.getText().toString())
@@ -1409,18 +1552,36 @@ public class FloatingService extends Service {
             // 自动读（面板刚打开）时，剪切板没变过就别覆盖上次没处理完的内容。
             if (silent && text.equals(lastClip)) return;
             lastClip = text;
+            // 超大内容先截断再处理：整段塞进 EditText 再同步跑正则/解码，
+            // 几 MB 的文本会让主线程卡到 ANR。这里截到 MAX_CLIP_CHARS，
+            // 超过就明确告诉用户被截了，而不是默默只转前一段。
+            boolean truncated = false;
+            if (text.length() > MAX_CLIP_CHARS) {
+                text = safeSubstring(text, MAX_CLIP_CHARS);
+                truncated = true;
+            }
             // 自动判断方向，但用户手动按过 ⇄ 之后以用户为准。
-            String auto = BinCore.autoDetect(text);
+            // 判断本身要跑正则和 Base64 试探解码，超长文本直接按文字处理，
+            // 免得在主线程上白算。
             if (!dirPinnedByUser) {
-                if ("bin2text".equals(auto)) dir = DIR_BIN2TEXT;
-                else if ("b64text".equals(auto)) dir = DIR_B64TEXT;
-                else if ("text2bin".equals(auto)) dir = DIR_TEXT2BIN;
+                if (text.length() <= MAX_AUTODETECT_CHARS) {
+                    String auto = BinCore.autoDetect(text);
+                    if ("bin2text".equals(auto)) dir = DIR_BIN2TEXT;
+                    else if ("b64text".equals(auto)) dir = DIR_B64TEXT;
+                    else if ("text2bin".equals(auto)) dir = DIR_TEXT2BIN;
+                } else {
+                    dir = DIR_TEXT2BIN;
+                }
             }
             input.setText(text);
             updateDir();
             flushRefresh();
             recordHistory(text);
-            if (!silent) toast(dirLabelText() + "：已填入");
+            if (!silent) {
+                toast(truncated
+                        ? "剪切板太长，只取了前 " + MAX_CLIP_CHARS + " 字符"
+                        : dirLabelText() + "：已填入");
+            }
         } catch (Exception e) {
             if (!silent) toast("读取剪切板失败：" + e.getMessage());
         }

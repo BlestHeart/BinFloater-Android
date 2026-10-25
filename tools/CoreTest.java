@@ -150,6 +150,15 @@ public class CoreTest {
         check("emoji Base64 能判定", BinCore.looksLikeBase64("8J+Zgg=="));
         eq("autoDetect Base64", BinCore.autoDetect("5L2g5aW9"), "b64text");
         eq("autoDetect 仍优先二进制", BinCore.autoDetect("0100100001101001"), "bin2text");
+        // 判定口径必须和解码一致：解码会自动补 padding，判定却按原始长度卡 4 的倍数，
+        // 于是 "SGVsbG8"（7 字符）自动识别认不出、手动解码又能解 —— 自相矛盾。
+        eq("autoDetect 认得无 padding 的 Base64", BinCore.autoDetect("SGVsbG8"), "b64text");
+        check("无 padding 的 Base64 能判定", BinCore.looksLikeBase64("SGVsbG8"));
+        // 判定和解码的上限也要一致：超过解码上限的长串不该被判成 Base64，
+        // 否则自动识别把方向设成 b64text，随后 refresh 只报「内容过长」。
+        StringBuilder hugeB64 = new StringBuilder();
+        for (int i = 0; i < 3000; i++) hugeB64.append("QUJD"); // 4000 字符 = 3000 字节
+        check("超长 Base64 不判为 Base64", !BinCore.looksLikeBase64(hugeB64.toString()));
 
         System.out.println("== 9e. 位串 -> Base64 ==");
         eq("位串转 Base64", BinCore.bitsToBase64("0100100001101001"), "SGk=");

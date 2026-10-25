@@ -65,13 +65,13 @@ fi
 rm -rf build/r_core && mkdir -p build/r_core
 "$JAVAC" -encoding UTF-8 -d build/r_core \
   app/src/com/binf/floater/BinCore.java tools/CoreTest.java 2>&1 | head -3
-run "编解码核心" 87 "$JAVA" -Dfile.encoding=UTF-8 -cp build/r_core CoreTest
+run "编解码核心" 90 "$JAVA" -Dfile.encoding=UTF-8 -cp build/r_core CoreTest
 
 # 2. 静态审查（读源码做约束检查，必须在项目根目录跑）
 rm -rf build/r_audit && mkdir -p build/r_audit
 "$JAVAC" -encoding UTF-8 -d build/r_audit \
   app/src/com/binf/floater/BinCore.java tools/StaticAudit.java 2>&1 | head -3
-run "静态审查" 99 "$JAVA" -Dfile.encoding=UTF-8 -cp build/r_audit com.binf.floater.StaticAudit
+run "静态审查" 101 "$JAVA" -Dfile.encoding=UTF-8 -cp build/r_audit com.binf.floater.StaticAudit
 
 echo ""
 echo "════════════════════════════════════════"

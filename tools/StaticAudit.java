@@ -202,7 +202,13 @@ public class StaticAudit {
         check("球外观统一入口", floCode.contains("applyBubbleStyle"), "");
         // 16) 转换历史：环形上限 + 去重 + 不落盘。
         check("历史有上限常量", floCode.contains("MAX_HISTORY"), "");
-        check("历史按方向区分", floCode.contains("DIR_SEP") || floCode.contains("\"\\u0002\""), "");
+        check("历史按方向区分", floCode.contains("DIR_SEP") || floCode.contains("'\\u0002'"), "");
+        // 用户内容里可能自带 \u0001/\u0002，不转义就会把一条历史拆成几条、chip 也切错位置。
+        check("历史条目转义分隔符",
+                floCode.contains("escapeHist") && floCode.contains("unescapeHist")
+                        && floCode.contains("unescapeHist(sep < 0"), "");
+        // 「清空历史」后一收面板又冒一条，是用户能直接看见的自相矛盾。
+        check("清空历史后不再写回", floCode.contains("skipHistoryOnHide"), "");
         check("历史去重后再入栈", floCode.contains("history.remove(entry)"), "");
         check("历史有清空入口", mainCode.contains("清空历史") || floCode.contains("清空历史"), "");
         // 17) 面板拖动：拖动时不能触发点击，且松手要记住位置。

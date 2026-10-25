@@ -340,22 +340,38 @@ public final class BinCore {
      * 3 个字节，所以光看字符集一定误判。真正的判据是**解出来的东西像不像文本**：
      * 必须能严格按 UTF-8 解出、控制字符占比低、打分不为负。
      * 例："test" 解出 B5 EB 2D，不是合法 UTF-8 → 判成普通文字。
+     *
+     * 判定的口径必须和解码完全一致，否则会出现「自动识别判成 Base64、
+     * 手动解码却报错」的自相矛盾：
+     *  - padding 用补齐后的长度算（base64ToBytes 会自动补），
+     *    于是 "SGVsbG8"（7 字符、无 padding）自动路径也认得出来；
+     *  - 长度上限和 base64ToText 一样卡 MAX_BITS/8 字节，超长的直接不判成 Base64；
+     *  - 只解一次，解出来的字节复用给后面的判断（以前 probe 解一遍、正式再解一遍，
+     *    长串在主线程上白解两遍）。
      */
     public static boolean looksLikeBase64(String text) {
         if (text == null) return false;
         String raw = text.trim();
-        if (raw.length() < 8) return false;
         if (raw.indexOf('\n') >= 0) return false;
         if (!B64_CHARS.matcher(raw).matches()) return false;
+        // 和 base64ToBytes 同一个口径：normalizeBase64 会补 padding，所以这里
+        // 比的应该是「补齐后」的长度，不是原始长度。
+        // 最短门槛也按补齐后算：7 个字符的 "SGVsbG8" 补齐后是 8，能解得出来，
+        // 按原始长度卡 8 就把它漏掉了。
+        String normalized = normalizeBase64(raw);
+        if (normalized.length() < 8) return false;
+        if (normalized.length() % 4 != 0) return false;
+        // 解出来的字节数不能超过解码上限，否则自动识别会把一段根本解不动的
+        // 长串判成 Base64，随后 refresh 只报「内容过长」。
+        if (normalized.length() / 4 * 3 > MAX_BITS / 8) return false;
         String stripped = raw.replaceAll("=", "");
-        // 长度必须是 4 的倍数（或至少去掉 padding 后能补齐）
-        if (raw.length() % 4 != 0) return false;
         // 纯字母且没有任何数字/+//= 的串，多半是英文单词，不冒这个险
         if (stripped.matches("[A-Za-z]+") && !raw.matches(".*[+=].*")) {
             byte[] probe = base64ToBytes(raw);
             String t = probe == null ? null : strictDecode(probe, "UTF-8");
             if (t == null) return false;
         }
+        // 只解这一次，后面复用。
         byte[] data = base64ToBytes(raw);
         if (data == null || data.length == 0) return false;
         String t = strictDecode(data, "UTF-8");
