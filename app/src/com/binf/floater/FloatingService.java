@@ -1349,8 +1349,10 @@ public class FloatingService extends Service {
         dirLabel.setText(dirLabelText());
         if (modeBtn != null) {
             modeBtn.setText(modeLabel());
-            // 其它三个方向用不上显示格式，灰掉免得用户以为点了没反应。
-            modeBtn.setTextColor(usesRenderMode() ? pal.muted : pal.cardHi);
+            // 其它三个方向用不上显示格式，淡掉免得用户以为点了没反应。
+            // 注意不能用 setTextColor(pal.cardHi)：那正好是按钮自己的背景色，
+            // 文字会和背景融成一片，按钮看起来像消失了（v2.3 真机验收踩到）。
+            modeBtn.setAlpha(usesRenderMode() ? 1f : 0.4f);
         }
     }
 

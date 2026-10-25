@@ -48,6 +48,15 @@ public class MainActivity extends Activity {
     private long pendingStartUntil = 0L;
     /** 当前配色，buildUi 时从 Palette 取一次。 */
     private Palette pal;
+    /**
+     * 上次画界面时用的球大小 / 不透明度档位。
+     *
+     * 长按悬浮球菜单也能改这两项（服务侧写同一个 prefs 键），
+     * 主界面此时在后台、不会重建界面。回到前台如果只刷状态文字，
+     * 卡片上还印着旧档位「大小：中」，可球已经是「大」了 —— 用户看到的和实际不一致。
+     */
+    private int shownScale = -1;
+    private int shownAlpha = -1;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -87,7 +96,9 @@ public class MainActivity extends Activity {
         }
         // 系统深浅色可能在后台切了（跟随系统模式下），回来时重画一遍。
         Palette now = Palette.get(this);
-        if (now != pal) {
+        int scaleNow = prefs.getInt("bubble_scale", 1);
+        int alphaNow = prefs.getInt("bubble_alpha", 1);
+        if (now != pal || scaleNow != shownScale || alphaNow != shownAlpha) {
             pal = now;
             setContentView(buildUi());
             refreshStatus();
@@ -318,6 +329,9 @@ public class MainActivity extends Activity {
 
         int scale = prefs.getInt("bubble_scale", 1);
         int alpha = prefs.getInt("bubble_alpha", 1);
+        // 记下这一版界面画的是哪两档，onResume 靠它判断要不要重建（见 shownScale 注释）。
+        shownScale = scale;
+        shownAlpha = alpha;
         String[] scaleLabels = {"小", "中", "大"};
         int[] alphas = {100, 80, 60, 40};
 

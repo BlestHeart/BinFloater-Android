@@ -231,6 +231,11 @@ public class StaticAudit {
         // 20) 主界面不能再有写死的颜色字面量（都应该走 Palette）。
         check("主界面不再写死颜色",
                 !mainCode.contains("Color.rgb(") && !mainCode.contains("0xFF0F1117"), "");
+        // 21) 文字颜色不能等于按钮自己的背景色，否则按钮看起来像消失了。
+        //     v2.3 真机验收踩到：modeBtn 在非 text2bin 方向把文字设成 pal.cardHi，
+        //     而 smallBtn 的背景正好也是 pal.cardHi —— 「8位」按钮整块空白。
+        check("文字颜色不等于自身背景色", !floCode.contains("setTextColor(pal.cardHi)"), "");
+        check("不可用按钮用 alpha 淡出", floCode.contains("modeBtn.setAlpha("), "");
 
         System.out.println();
         System.out.println("审查项：" + checked + "  问题：" + problems);
