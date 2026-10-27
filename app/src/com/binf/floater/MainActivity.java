@@ -60,11 +60,41 @@ public class MainActivity extends Activity {
     private int shownScale = -1;
     private int shownAlpha = -1;
 
+    // ---- 检查更新 ----
+    /** 更新卡片的状态机。 */
+    private static final int UPD_IDLE = 0;
+    private static final int UPD_CHECKING = 1;
+    private static final int UPD_LATEST = 2;
+    private static final int UPD_FOUND = 3;
+    private static final int UPD_DOWNLOADING = 4;
+    private static final int UPD_READY = 5;
+    private static final int UPD_FAILED = 6;
+
+    /**
+     * 这几个是 static 的：下载要跑十几秒，转屏会把 Activity 重建一遍，
+     * 状态放实例字段里就丢了 —— 重建后界面显示「检查更新」，可 APK 其实已经下完。
+     */
+    private static int updState = UPD_IDLE;
+    private static UpdateChecker.Info updInfo;
+    private static String updError = "";
+
+    /**
+     * 当前活着的实例。下载回调要拿它回主线程刷界面，
+     * 而回调里的 Activity 引用可能是已经被转屏销毁的旧实例。
+     */
+    private static MainActivity current;
+
+    private TextView updStatus;
+    private Button updBtn;
+    /** 刚从「允许安装未知应用」设置页跳出去，回来要接着装。 */
+    private boolean resumeInstallAfterSettings = false;
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         prefs = getSharedPreferences("binf", Context.MODE_PRIVATE);
         pal = Palette.get(this);
+        current = this;
         setContentView(buildUi());
         applySystemBars();
         requestNotificationPermissionIfNeeded();
@@ -83,8 +113,15 @@ public class MainActivity extends Activity {
     }
 
     @Override
+    protected void onDestroy() {
+        if (current == this) current = null;
+        super.onDestroy();
+    }
+
+    @Override
     protected void onResume() {
         super.onResume();
+        current = this;
         syncEnabledPref();
         refreshStatus();
         // 从权限设置页回来时开关要跟着实际状态走。
@@ -107,6 +144,12 @@ public class MainActivity extends Activity {
             refreshStatus();
             applySystemBars();
         }
+        // 刚从「允许安装未知应用」页回来，接着把包装掉
+        if (resumeInstallAfterSettings) {
+            resumeInstallAfterSettings = false;
+            if (canInstallPackages()) installDownloaded();
+        }
+        maybeAutoCheckUpdate();
     }
 
     /**
@@ -236,7 +279,8 @@ public class MainActivity extends Activity {
         addSectionTitle("数据");
         LinearLayout dataCard = makeCard();
         TextView dataNote = new TextView(this);
-        dataNote.setText("转换历史、球的位置、外观设置都只存在本机，App 没有联网权限。");
+        dataNote.setText("转换历史、球的位置、外观设置都只存在本机，不上传任何东西。"
+                + "App 只在「检查更新」时访问一次 GitHub，用来读版本号和下载本 App 自己的 APK。");
         dataNote.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11);
         dataNote.setTextColor(pal.muted);
         dataCard.addView(dataNote);
@@ -256,6 +300,8 @@ public class MainActivity extends Activity {
         ver.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
         ver.setTextColor(pal.muted);
         verCard.addView(ver);
+
+        addUpdateRow(verCard);
 
         Button reset = makeButton("重置所有设置", false);
         reset.setOnClickListener(v -> resetSettings());
@@ -701,6 +747,228 @@ public class MainActivity extends Activity {
         }
         refreshStatus();
         toast("已恢复默认设置");
+    }
+
+    // ---------------------------------------------------------------- 检查更新
+
+    /** 版本卡片里的「检查更新 / 下载 / 安装」一行。 */
+    private void addUpdateRow(LinearLayout card) {
+        updStatus = new TextView(this);
+        updStatus.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+        updStatus.setTextColor(pal.muted);
+        updStatus.setLineSpacing(dp(3), 1f);
+        LinearLayout.LayoutParams slp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        slp.topMargin = dp(10);
+        card.addView(updStatus, slp);
+
+        updBtn = makeButton("检查更新", false);
+        updBtn.setOnClickListener(v -> onUpdateButton());
+        LinearLayout.LayoutParams blp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(42));
+        blp.topMargin = dp(10);
+        card.addView(updBtn, blp);
+
+        renderUpdateRow();
+    }
+
+    /** 按 updState 把状态文字和按钮文案刷一遍。重建界面时也会调，所以状态是留在字段里的。 */
+    private void renderUpdateRow() {
+        if (updStatus == null || updBtn == null) return;
+        String tag = updInfo == null ? "" : updInfo.tag;
+        switch (updState) {
+            case UPD_CHECKING:
+                updStatus.setText("正在查 GitHub 上的最新版本…");
+                updBtn.setText("检查中…");
+                updBtn.setEnabled(false);
+                break;
+            case UPD_LATEST:
+                updStatus.setText("已经是最新版本（v" + versionName() + "）。");
+                updBtn.setText("再查一次");
+                updBtn.setEnabled(true);
+                break;
+            case UPD_FOUND:
+                updStatus.setText("发现新版本 " + tag + "，当前是 v" + versionName() + "。");
+                updBtn.setText(hasApkAsset() ? "下载 " + tag : "打开发布页");
+                updBtn.setEnabled(true);
+                break;
+            case UPD_DOWNLOADING:
+                updStatus.setText("正在下载 " + tag + "…");
+                updBtn.setText("下载中…");
+                updBtn.setEnabled(false);
+                break;
+            case UPD_READY:
+                updStatus.setText("已下载 " + tag + "，点下面安装（系统会弹安装界面）。");
+                updBtn.setText("安装");
+                updBtn.setEnabled(true);
+                break;
+            case UPD_FAILED:
+                updStatus.setText("检查失败：" + updError);
+                updBtn.setText("重试");
+                updBtn.setEnabled(true);
+                break;
+            case UPD_IDLE:
+            default:
+                // 版本号上面那行已经有了，这里不重复，只说清楚「更新是怎么来的」
+                updStatus.setText("更新包从 GitHub Releases 下载，只下载本 App 自己的 APK，"
+                        + "装完设置和悬浮窗位置都还在。");
+                updBtn.setText("检查更新");
+                updBtn.setEnabled(true);
+                break;
+        }
+    }
+
+    private boolean hasApkAsset() {
+        return updInfo != null && updInfo.apkUrl != null && !updInfo.apkUrl.isEmpty();
+    }
+
+    private void onUpdateButton() {
+        switch (updState) {
+            case UPD_FOUND:
+                if (hasApkAsset()) startDownload();
+                else openPage(updInfo == null ? null : updInfo.pageUrl);
+                return;
+            case UPD_READY:
+                installDownloaded();
+                return;
+            default:
+                checkForUpdate(true);
+        }
+    }
+
+    /**
+     * 打开主界面时顺手查一次，24 小时节流。
+     *
+     * 静默失败：国内直连 api.github.com 经常超时，每次开 App 弹一句「检查失败」
+     * 纯属噪音。只有用户自己点「检查更新」才把失败原因显示出来。
+     */
+    private void maybeAutoCheckUpdate() {
+        if (updState == UPD_CHECKING || updState == UPD_DOWNLOADING || updState == UPD_READY) return;
+        long last = prefs.getLong("last_update_check", 0L);
+        if (System.currentTimeMillis() - last < UpdateChecker.AUTO_INTERVAL_MS) return;
+        checkForUpdate(false);
+    }
+
+    private void checkForUpdate(final boolean manual) {
+        if (updState == UPD_CHECKING || updState == UPD_DOWNLOADING) return;
+        if (manual) {
+            updState = UPD_CHECKING;
+            renderUpdateRow();
+        }
+        prefs.edit().putLong("last_update_check", System.currentTimeMillis()).apply();
+        UpdateChecker.checkAsync((info, error) -> {
+            if (info == null) {
+                updState = manual ? UPD_FAILED : UPD_IDLE;
+                updError = error == null ? "未知原因" : error;
+            } else if (VersionUtil.isNewer(info.tag, versionName())) {
+                updInfo = info;
+                updState = UPD_FOUND;
+            } else {
+                updInfo = null;
+                updError = "";
+                updState = manual ? UPD_LATEST : UPD_IDLE;
+            }
+            renderUpdateRow();
+            if (manual && updState == UPD_LATEST) toast("已经是最新版本");
+        });
+    }
+
+    private void startDownload() {
+        if (!hasApkAsset()) return;
+        final UpdateChecker.Info info = updInfo;
+        updState = UPD_DOWNLOADING;
+        renderUpdateRow();
+        // 用 applicationContext：下载只用到 cacheDir，不需要 Activity 活着
+        final Context app = getApplicationContext();
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                java.io.File f = UpdateChecker.download(app, info.apkUrl, new UpdateChecker.Progress() {
+                    @Override
+                    public void onProgress(final int percent) {
+                        final MainActivity c = current;
+                        if (c == null) return;
+                        c.runOnUiThread(new Runnable() {
+                            @Override
+                            public void run() {
+                                if (updState == UPD_DOWNLOADING && c.updStatus != null) {
+                                    c.updStatus.setText("正在下载 " + info.tag + "：" + percent + "%");
+                                }
+                            }
+                        });
+                    }
+                });
+                final boolean ok = f != null;
+                final MainActivity c = current;
+                if (c != null) {
+                    c.runOnUiThread(new Runnable() {
+                        @Override
+                        public void run() {
+                            if (ok) {
+                                updState = UPD_READY;
+                            } else {
+                                updState = UPD_FAILED;
+                                updError = "下载失败，换个网络再试";
+                            }
+                            if (c.updStatus != null) c.renderUpdateRow();
+                        }
+                    });
+                } else if (ok) {
+                    updState = UPD_READY;
+                } else {
+                    updState = UPD_FAILED;
+                    updError = "下载失败，换个网络再试";
+                }
+            }
+        }).start();
+    }
+
+    /** minSdk 34，canRequestPackageInstalls 一定存在，不用版本判断。 */
+    private boolean canInstallPackages() {
+        try {
+            return getPackageManager().canRequestPackageInstalls();
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    /**
+     * 拉起系统安装器。targetSdk 24 起必须走 content://，
+     * 这里交给 ApkProvider（自己写的极简 FileProvider 替代品）。
+     */
+    private void installDownloaded() {
+        if (!canInstallPackages()) {
+            resumeInstallAfterSettings = true;
+            toast("先允许「安装未知应用」，回来就接着装");
+            try {
+                startActivity(new Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                        Uri.parse("package:" + getPackageName())));
+            } catch (Exception e) {
+                toast("打不开设置页，请到「设置 → 应用 → 特殊权限」里手动允许");
+            }
+            return;
+        }
+        resumeInstallAfterSettings = false;
+        try {
+            Intent i = new Intent(Intent.ACTION_VIEW);
+            i.setDataAndType(ApkProvider.uri(), "application/vnd.android.package-archive");
+            i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK);
+            startActivity(i);
+        } catch (Exception e) {
+            toast("拉起安装器失败：" + e.getClass().getSimpleName());
+        }
+    }
+
+    private void openPage(String url) {
+        if (url == null || url.isEmpty()) {
+            toast("这个版本没挂 APK 附件，也没有发布页地址");
+            return;
+        }
+        try {
+            startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url)));
+        } catch (Exception e) {
+            toast("打不开浏览器");
+        }
     }
 
     private void toast(String msg) {

@@ -30,11 +30,17 @@ public class StaticAudit {
         String bin = read(base + "BinCore.java");
         String pal = read(base + "Palette.java");
         String manifest = read("app/AndroidManifest.xml");
+        String upd = read(base + "UpdateChecker.java");
+        String prov = read(base + "ApkProvider.java");
+        String ver = read(base + "VersionUtil.java");
         // 反向断言一律对去注释后的代码做，否则会命中「以前写的是…」这类注释
         String mainCode = stripComments(main);
         String floCode = stripComments(flo);
         String binCode = stripComments(bin);
         String palCode = stripComments(pal);
+        String updCode = stripComments(upd);
+        String provCode = stripComments(prov);
+        String verCode = stripComments(ver);
 
         System.out.println("=== A. 悬浮窗关键点 ===");
         check("用 TYPE_APPLICATION_OVERLAY", flo.contains("TYPE_APPLICATION_OVERLAY"), "");
@@ -99,7 +105,10 @@ public class StaticAudit {
         check("没有输入法服务声明", !manifest.contains("BIND_INPUT_METHOD"), "");
         check("没有 InputMethod 意图", !manifest.contains("android.view.InputMethod"), "");
         check("没有 method 资源引用", !manifest.contains("@xml/method"), "");
-        check("没有联网权限", !manifest.contains("android.permission.INTERNET"), "");
+        // 联网权限是有意加的：只给「检查更新」用（查 GitHub Releases、下载本 App 的 APK）。
+        // 但仍然不要 ACCESS_NETWORK_STATE —— 那是用来探测网络状态做后台重试的，这里不需要。
+        check("声明 INTERNET（只给检查更新用）",
+                manifest.contains("android.permission.INTERNET"), "");
         check("没有网络状态权限", !manifest.contains("ACCESS_NETWORK_STATE"), "");
 
         System.out.println("=== E. 常见空指针风险 ===");
@@ -273,6 +282,44 @@ public class StaticAudit {
         check("自动识别不覆盖正向编码目标",
                 methodBody(floCode, "private void applyAutoDir(String in)")
                         .contains("dir = codecB64 ? DIR_TEXT2B64 : DIR_TEXT2BIN;"), "");
+
+        System.out.println("=== J. 检查更新 / 安装器 ===");
+        // 26) 打开主界面顺手查一次，24 小时节流；失败静默（国内直连 api.github.com 常超时）
+        check("主界面会调自动检查", mainCode.contains("maybeAutoCheckUpdate()"), "");
+        check("自动检查有 24 小时节流",
+                mainCode.contains("UpdateChecker.AUTO_INTERVAL_MS"), "");
+        check("自动检查失败静默",
+                mainCode.contains("updState = manual ? UPD_FAILED : UPD_IDLE"),
+                "自动检查失败也会显示错误，开 App 就弹噪音");
+        // 27) 下载：用 applicationContext（转屏重建不能中断），有大小上限，失败要删半截文件
+        check("下载用 applicationContext", mainCode.contains("getApplicationContext()"), "");
+        check("下载失败删半截文件", updCode.contains("out.delete()"), "");
+        check("下载有大小上限", updCode.contains("MAX_APK_BYTES"), "");
+        check("请求带 User-Agent", updCode.contains("\"User-Agent\""), "GitHub API 不带 UA 会 403");
+        check("404 和 403 分别提示",
+                updCode.contains("404") && updCode.contains("403"), "");
+        // 28) 安装：必须走 content://（file:// 在 targetSdk 24+ 直接抛 FileUriExposedException）
+        check("安装走 content URI", mainCode.contains("ApkProvider.uri()"), "");
+        check("代码里没有 file:// URI", !mainCode.contains("file://"),
+                "targetSdk 24+ 用 file:// 会抛 FileUriExposedException");
+        check("安装授予读 URI 权限", mainCode.contains("FLAG_GRANT_READ_URI_PERMISSION"), "");
+        check("判定未知来源权限", mainCode.contains("canRequestPackageInstalls"), "");
+        check("能引导去开未知来源", mainCode.contains("ACTION_MANAGE_UNKNOWN_APP_SOURCES"), "");
+        check("从设置页回来续装", mainCode.contains("resumeInstallAfterSettings"), "");
+        // 29) Provider 只放行这一个文件，且只读
+        check("provider 只提供 update.apk",
+                provCode.contains("FILE_NAME.equals(uri.getLastPathSegment())"), "");
+        check("provider 只读打开", provCode.contains("MODE_READ_ONLY"), "");
+        check("manifest 声明 provider", manifest.contains("com.binf.floater.apk"), "");
+        check("manifest 有 INTERNET 权限",
+                manifest.contains("android.permission.INTERNET"), "");
+        check("manifest 有安装未知应用权限",
+                manifest.contains("REQUEST_INSTALL_PACKAGES"), "");
+        // 30) 版本比较是纯函数（能桌面单测），且不再声称「没有联网权限」
+        check("版本比较在 VersionUtil 里", verCode.contains("public static int compare"), "");
+        check("主界面不再声称没有联网权限",
+                !mainCode.contains("App 没有联网权限"),
+                "已经加了检查更新，这句是假话");
 
         System.out.println();
         System.out.println("审查项：" + checked + "  问题：" + problems);

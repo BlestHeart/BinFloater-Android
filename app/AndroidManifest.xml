@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.binf.floater"
-    android:versionCode="4"
-    android:versionName="2.4">
+    android:versionCode="5"
+    android:versionName="2.5">
 
     <uses-sdk android:minSdkVersion="34" android:targetSdkVersion="36" />
 
@@ -11,6 +11,10 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- 检查更新：只有「打开主界面时查一次 GitHub Releases」用到，24 小时一次 -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <!-- 下载完 APK 后拉起系统安装器 -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
     <application
         android:label="@string/app_name"
@@ -28,6 +32,15 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- 把 cacheDir 里的 update.apk 交给系统安装器。
+             不用 AndroidX 的 FileProvider（本项目无 Gradle / 无 AndroidX），
+             自己写了个只提供这一个文件的 ContentProvider。 -->
+        <provider
+            android:name=".ApkProvider"
+            android:authorities="com.binf.floater.apk"
+            android:exported="false"
+            android:grantUriPermissions="true" />
 
         <service
             android:name=".FloatingService"

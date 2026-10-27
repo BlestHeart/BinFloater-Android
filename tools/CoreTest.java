@@ -1,4 +1,5 @@
 import com.binf.floater.BinCore;
+import com.binf.floater.VersionUtil;
 
 /** BinCore 自测：不依赖 Android，可直接用 java 运行。 */
 public class CoreTest {
@@ -166,6 +167,24 @@ public class CoreTest {
         eq("renderBits base64", BinCore.renderBits("0100100001101001", "base64"), "SGk=");
         eq("renderBits 未知模式兜底",
                 BinCore.renderBits("0100100001101001", "nonsense"), "01001000 01101001");
+
+        System.out.println("== 10. 版本号比较（检查更新用） ==");
+        // Release 的 tag 是 v2.4 这种，只有 versionName 没有 versionCode，
+        // 所以必须能比字符串版本号，而且不能按字典序比（"2.10" < "2.9" 是错的）。
+        check("2.5 比 2.4 新", VersionUtil.isNewer("v2.5", "2.4"));
+        check("同一个版本不算新", !VersionUtil.isNewer("v2.4", "2.4"));
+        check("旧版本返回 -1", VersionUtil.compare("2.4", "v2.5") < 0);
+        eq("2.4 与 2.4.0 相等", VersionUtil.compare("2.4", "2.4.0"), 0);
+        check("2.10 比 2.9 新（按数字不是按字典）", VersionUtil.isNewer("2.10", "2.9"));
+        check("前缀字母不影响", VersionUtil.isNewer("release-2.5", "v2.4"));
+        check("预发布后缀被忽略", VersionUtil.isNewer("v2.5-beta", "2.4"));
+        check("缺位补 0：3 比 2.9.9 新", VersionUtil.isNewer("3", "2.9.9"));
+        check("四位版本号", VersionUtil.isNewer("v1.2.3.4", "1.2.3.3"));
+        check("抠不出数字时返回 0", VersionUtil.compare("abc", "v2.4") == 0);
+        check("null 不会崩", VersionUtil.compare(null, null) == 0);
+        check("空串返回 0", VersionUtil.compare("", "2.4") == 0);
+        check("parse 抠不出返回 null", VersionUtil.parse("v") == null);
+        check("parse 认 v 前缀", VersionUtil.parse("v2.4") != null && VersionUtil.parse("v2.4").length == 2);
 
         System.out.println();
         System.out.println("结果：通过 " + pass + " 项，失败 " + fail + " 项");

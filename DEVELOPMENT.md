@@ -60,12 +60,12 @@ d8 --min-api 34 --output build/dex build/classes/**/*.class
 bash run_tests.sh
 ```
 
-两组共累计 208 项：
+两组共累计 243 项：
 
 | 组 | 项数 | 测什么 |
 |---|---|---|
-| 编解码核心 | 90 | `BinCore` 的双向转换、分隔符、编码回退、阈值判定、长度上限、hex 不截断、Base64 编解码与判定 |
-| 静态审查 | 118 | 读源码做约束检查（见下） |
+| 编解码核心 | 104 | `BinCore` 的双向转换、分隔符、编码回退、阈值判定、长度上限、hex 不截断、Base64 编解码与判定；`VersionUtil` 的版本号比较 |
+| 静态审查 | 139 | 读源码做约束检查（见下） |
 
 ### 为什么有「静态审查」这一组
 
@@ -298,6 +298,56 @@ static final Pattern ZERO_B = Pattern.compile("(?i)0b");
 
 ---
 
+## 检查更新
+
+思路很朴素：GitHub 的 `releases/latest` 就是个现成的「最新版本 JSON」，里面有 `tag_name` 和附件的
+`browser_download_url`。不用自己维护一份 manifest，也不用服务器。
+
+### 为什么版本号按字符串比，不按 versionCode
+
+`versionCode` 是安卓内部用来判「能不能覆盖安装」的，只有本机装过的那份才知道；
+而 Release 的 tag 里只有 `v2.5` 这种版本名。所以比较逻辑必须吃字符串：
+
+```java
+VersionUtil.isNewer("v2.5", "2.4")   // true
+VersionUtil.isNewer("2.10", "2.9")   // true —— 按数字比，不是字典序
+```
+
+解析不出数字（`abc`、空串、null）时返回 0，也就是「当没更新」——**宁可不提示，也不误报**。
+缺的位按 0 补齐，所以 `2.4` 和 `2.4.0` 相等。
+
+### 为什么自动检查必须静默失败
+
+国内直连 `api.github.com` 大概率超时（本机 `git push` 都得走代理）。如果每次打开主界面都弹一句
+「检查失败」，那就是纯噪音。所以：
+
+- 自动检查（24 小时节流一次）：失败什么都不显示
+- 手动点「检查更新」：才把 `404` / `403` / 超时 / 解析失败的原因写出来
+
+### 为什么自己写 ContentProvider 而不用 FileProvider
+
+`FileProvider` 是 AndroidX 的类，而这个项目是 `aapt2 + javac + d8` 手搓的，没有 Gradle、
+没有 AndroidX —— 为了一个安装动作把整个 AndroidX 拉进来不值。`FileProvider` 本身也不神秘，
+就是把 `content://` 的 `openFile` 映射到私有目录里的某个文件，照着写一个只放行单个文件的最小版本就够。
+
+反过来 `file://` 是绝对不能用的：`targetSdk` 24 起系统直接抛 `FileUriExposedException`。
+
+### 下载状态为什么是 static 的
+
+下载要跑十几秒，中途转屏会把 Activity 重建一遍。状态放在实例字段里，重建后界面就显示「检查更新」，
+可 APK 其实已经下完了。所以 `updState` / `updInfo` 是 static，另外用一个 `static MainActivity current`
+让下载回调能找到「当前活着的那个界面」回主线程刷新。
+
+### 这个功能依赖发版纪律
+
+`releases/latest` 只认 **正式 Release**，且必须是「最新」的那一个。所以：
+
+- 发版必须打 tag（`v2.5`），且 Release 里要挂 `.apk` 附件
+- 没打 tag 的提交查不到更新
+- 仓库是 private 时匿名请求返回 404，功能只会提示「没有找到 Release」
+
+---
+
 ## 目录结构
 
 ```
@@ -310,11 +360,14 @@ app/
   src/com/binf/floater/
     BinCore.java               编解码核心（含 Base64）
     FloatingService.java       悬浮球 + 面板 + 历史 + 拖动
-    MainActivity.java          设置界面（主题 / 历史 / 球外观）
+    MainActivity.java          设置界面（主题 / 历史 / 球外观 / 检查更新）
     Palette.java               深浅色两套调色板
+    VersionUtil.java           版本号比较（纯逻辑，可桌面单测）
+    UpdateChecker.java         查 GitHub Releases + 下载 APK
+    ApkProvider.java           极简 ContentProvider，把 APK 交给安装器
 tools/
-  CoreTest.java                90 项编解码测试
-  StaticAudit.java             118 项源码约束检查
+  CoreTest.java                104 项编解码 + 版本号测试
+  StaticAudit.java             139 项源码约束检查
   push_github.sh               推送脚本
 signing/
   README.md                    密钥说明（密钥本身不进 git）
@@ -501,6 +554,29 @@ modeBtn.setTextColor(usesRenderMode() ? pal.muted : pal.cardHi);  // ← 错
 **修法**：`applyLookRefresh()` 里 `themeChanged && !panelVisible` 时把 `panel` 置 null，逼下次 `showPanel()` 走 `buildPanel()`。
 
 教训：**`removeView()` ≠ 释放**。一个「按需创建、缓存复用」的 View 树，凡是改动配色/字号/布局这类全局外观的路径，都要么就地重刷、要么把缓存丢掉；只改字段不改 View，缓存的那份就是脏的。
+
+### 检查更新踩到的 4 个坑
+
+**1. `file://` 直接抛异常** —— 想用 `Intent.ACTION_VIEW` + `Uri.fromFile(apk)` 拉起安装器，
+`targetSdk` 24 起系统直接抛 `FileUriExposedException`。而项目没有 AndroidX，用不了 `FileProvider`。
+**修法：自己写 `ApkProvider`（只放行 `update.apk` 一个文件、只读打开），配合
+`FLAG_GRANT_READ_URI_PERMISSION`。** 静态审查加了一条反向断言 `!mainCode.contains("file://")` 守着。
+
+**2. 私有仓库的 `releases/latest` 返回 404** —— 一开始把非 200 一律报「服务器返回 N」，
+仓库没公开时用户看到的是「服务器返回 404」，完全猜不到真实原因。**修法：404 单独翻译成
+「没有找到 Release（仓库还没公开，或者还没发过版）」，403 翻译成「被限流了」。**
+
+**3. 下载中途转屏，进度和结果全丢** —— 状态放实例字段，Activity 重建后 `updState` 回到 `UPD_IDLE`，
+界面显示「检查更新」，实际文件已经躺在 cacheDir 里。**修法：状态改 static，再用一个
+`static MainActivity current` 让回调能找到活着的界面；`onDestroy` 里把 `current` 置 null。**
+
+**4. 静态审查里那条「没有联网权限」反向断言** —— 加 `INTERNET` 之后它从绿变红。
+这条断言在 v2.0「删掉输入法时代权限」时是对的，加检查更新之后就成了过期约束。
+**修法：改成正向断言「声明 INTERNET（只给检查更新用）」，同时保留「没有 ACCESS_NETWORK_STATE」**
+（那是用来探测网络状态做后台重试的，确实不需要）。
+
+教训：**反向断言（`!contains`）会随需求演进而过期**。它不是「代码错了」，是「约束变了」——
+看到它变红先想清楚是新需求推翻了旧约束，还是真的回退了，别直接删断言了事。
 
 **这轮的教训**：静态审查 103 项全是 `contains` 字符串匹配，**上面一条也测不出**。字符串断言能守「结构不能变」，守不住「行为对不对」。像「DOWN 返回 true/false」「先 clamp 还是先重排」这种顺序问题，只有通读代码或真机才能发现。所以流程改成：改完代码先让子 agent 只读通读一遍，再自己逐条核对行号，最后才跑测试、装真机点一遍。
 
