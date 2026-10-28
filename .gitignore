@@ -38,3 +38,9 @@ venv/
 /signing/*.keystore
 /signing/*.jks
 /signing/*.p12
+
+# 临时脚本（发布/调试时随手写的，用完就删，别进仓库）
+_*.sh
+_*.py
+_*.json
+_*.apk
