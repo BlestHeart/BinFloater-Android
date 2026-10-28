@@ -300,8 +300,31 @@ static final Pattern ZERO_B = Pattern.compile("(?i)0b");
 
 ## 检查更新
 
-思路很朴素：GitHub 的 `releases/latest` 就是个现成的「最新版本 JSON」，里面有 `tag_name` 和附件的
-`browser_download_url`。不用自己维护一份 manifest，也不用服务器。
+思路很朴素：GitHub 的 `releases/latest` 是个现成的「最新版本号」入口，不用自己维护 manifest、不用服务器。
+
+### 为什么不打 api.github.com
+
+最初用的是 `api.github.com/repos/<owner>/<repo>/releases/latest`，返回一份 JSON，从里面取
+`tag_name` 和附件的 `browser_download_url`。写起来最直观，但有个致命问题：**这个接口未认证时
+每小时只有 60 次，而且是按 IP 算的**。
+
+仓库刚公开就踩到了 —— 本机走代理，出口 IP 是个共享地址，`remaining` 直接是 0，
+请求 `releases/latest` 稳定返回 `403 API rate limit exceeded`。手机走运营商 CGNAT 同理，
+一个 IP 后面可能挂着一整个小区。**功能不能靠「运气好没被限流」。**
+
+改成请求网页：
+
+```
+GET https://github.com/BlestHeart/BinFloater-Android/releases/latest
+  → 302 Location: .../releases/tag/v2.5
+```
+
+tag 从 `Location` 里抠出来（`VersionUtil.parseTag`），APK 地址由 tag 直接拼：
+`<repo>/releases/download/<tag>/BinFloater.apk`（路径是固定的，不用再查附件列表）。
+
+好处：**不限流、不解析 JSON、不依赖 `org.json`**，还少一次请求。
+代价：要自己接管重定向（`setInstanceFollowRedirects(false)`，否则跟到最终页就拿不到 `Location` 了），
+并且 GitHub 偶尔会先 301 到带尾斜杠的规范地址，所以最多跟 4 跳。
 
 ### 为什么版本号按字符串比，不按 versionCode
 
@@ -318,11 +341,11 @@ VersionUtil.isNewer("2.10", "2.9")   // true —— 按数字比，不是字典�
 
 ### 为什么自动检查必须静默失败
 
-国内直连 `api.github.com` 大概率超时（本机 `git push` 都得走代理）。如果每次打开主界面都弹一句
+国内直连 `github.com` 大概率超时（本机 `git push` 都得走代理）。如果每次打开主界面都弹一句
 「检查失败」，那就是纯噪音。所以：
 
 - 自动检查（24 小时节流一次）：失败什么都不显示
-- 手动点「检查更新」：才把 `404` / `403` / 超时 / 解析失败的原因写出来
+- 手动点「检查更新」：才把 `404` / 超时 / 重定向异常的原因写出来
 
 ### 为什么自己写 ContentProvider 而不用 FileProvider
 
@@ -345,6 +368,7 @@ VersionUtil.isNewer("2.10", "2.9")   // true —— 按数字比，不是字典�
 - 发版必须打 tag（`v2.5`），且 Release 里要挂 `.apk` 附件
 - 没打 tag 的提交查不到更新
 - 仓库是 private 时匿名请求返回 404，功能只会提示「没有找到 Release」
+- 附件名必须是 `BinFloater.apk`（`UpdateChecker.APK_NAME`），因为下载地址是按这个名拼的
 
 ---
 
