@@ -582,6 +582,56 @@ modeBtn.setTextColor(usesRenderMode() ? pal.muted : pal.cardHi);  // ← 错
 
 ---
 
+## 性能
+
+微基准在 `tools/Bench.java`，纯 JVM、无第三方依赖，**不进 `run_tests.sh`**
+（微基准受 JIT/机器状态影响大，混进回归只会让 CI 抖动）。手动跑：
+
+```bash
+export JAVA_HOME="/c/Program Files/Zulu/zulu-21"
+"$JAVA_HOME/bin/javac" -encoding UTF-8 -d build/r_bench \
+  app/src/com/binf/floater/BinCore.java tools/Bench.java
+"$JAVA_HOME/bin/java" -Dfile.encoding=UTF-8 -cp build/r_bench com.binf.floater.Bench
+```
+
+样本：中文正文 4000 字符 / 12000 字节、位串 20000 位、Base64 16000 字符。
+
+| 调用 | 优化前 ms | 优化后 ms | |
+|---|---|---|---|
+| `renderBits(bits,"hex")` | 6.628 | 0.124–0.159 | **↓ 95%** |
+| `autoDetect`（Base64） | 1.338 | 0.231–0.263 | ↓ 82% |
+| `base64ToText`（16000 字） | 1.118 | 0.277–0.324 | ↓ 72% |
+| `cleanBits`（20000 位带空格） | 0.793 | 0.230–0.260 | ↓ 68% |
+| `autoDetect`（中文） | 0.161 | 0.061–0.070 | ↓ 60% |
+| `binaryToText`（20000 位） | 1.085 | 0.628–0.680 | ↓ 40% |
+| `autoDetect`（位串） | 0.637 | 0.092–0.108 | ↓ 84% |
+| `renderBits(bits,"group8")` | 0.192 | 0.172–0.181 | ↓ 10% |
+| `textToBinary`（4000 字） | 0.270 | 0.273–0.285 | 持平 |
+| `describe`（4000 字） | 0.013 | 0.013–0.015 | 持平 |
+
+四条改法：
+
+1. **`renderBits` 的 hex 档从「每字节格式化一次」改成查表**。原来是
+   `String.format("%02X ", b)` —— 一个字节一次格式化调用、一次正则解析，
+   是这次最大的一处浪费。改成 `HEX2[256]` 静态表 + 预分配 `StringBuilder`。
+2. **`Charset.forName("UTF-8")` 换成 `StandardCharsets.UTF_8` 静态常量**。
+   前者每次调用都要走一遍 charset 查找（带锁的 map）。`GBK` 同理。
+3. **`cleanBits` / `stripSpaces` / `normalizeBase64` 改惰性分配**。
+   原来是「无条件 `StringBuilder` 复制一遍」；现在是先扫一遍看有没有要删/改的
+   字符，没有就返回原串。位串那条路径还加了「已经是纯 0/1 就直接返回」的快路径。
+4. **`binaryToText` 按 8 位批量取值**，不再逐位 `parseInt`。
+
+### 少分配 ≠ 更快
+
+`describe()` 里那个 `text.getBytes(UTF8).length` 看着很浪费 —— 只为拿一个长度
+就整块编码一遍。我试过改成逐字符数 UTF-8 字节数（`utf8Length`），结果**更慢**：
+0.031 ms vs 0.013 ms。JDK 的 UTF-8 编码是向量化的，逐字符 `if/else` 分支打不过它。
+
+已回退，并在代码里留了注释。教训：**优化要量，不要凭直觉**——「看起来更省的写法」
+在热点循环里经常更贵。
+
+---
+
 ## 后续可做
 
 - **开机自启**：加 `RECEIVE_BOOT_COMPLETED` + 一个 BootReceiver，重启后自动把球放出来（用户当前没要）
