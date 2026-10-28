@@ -187,14 +187,14 @@ public class MainActivity extends Activity {
 
         // 标题
         TextView title = new TextView(this);
-        title.setText("二进制悬浮窗");
+        title.setText("编码悬浮窗");
         title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 26);
         title.setTextColor(pal.text);
         title.setTypeface(Typeface.DEFAULT_BOLD);
         root.addView(title);
 
         TextView sub = new TextView(this);
-        sub.setText("桌面上一个小球，点开就能把剪切板里的文字转成二进制，或者把二进制译回文字");
+        sub.setText("桌面上一个小球，点开就能把文字转成二进制 / HEX / Base64，或者反过来解回文字");
         sub.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
         sub.setTextColor(pal.muted);
         LinearLayout.LayoutParams subLp = new LinearLayout.LayoutParams(
@@ -243,7 +243,7 @@ public class MainActivity extends Activity {
         addSectionTitle("怎么用");
         LinearLayout howCard = makeCard();
         TextView how = new TextView(this);
-        how.setText("1. 在任意 App 里复制一段文字或一串 0/1\n"
+        how.setText("1. 在任意 App 里复制一段文字、一串 0/1 或一段 Base64\n"
                 + "2. 点桌面上的「01」小球，面板会自动读剪切板并转换\n"
                 + "3. 点「复制」把结果放回剪切板，粘到别处去\n\n"
                 + "面板上还有输入框，不想走剪切板就直接在里面打字。\n"
@@ -601,7 +601,7 @@ public class MainActivity extends Activity {
         textBox.addView(t);
 
         TextView d = new TextView(this);
-        d.setText("桌面上的小悬浮球，点开可双向转换（需悬浮窗权限）");
+        d.setText("桌面上的小悬浮球，点开就能转码（需悬浮窗权限）");
         d.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11);
         d.setTextColor(pal.muted);
         LinearLayout.LayoutParams dlp = new LinearLayout.LayoutParams(

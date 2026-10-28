@@ -79,7 +79,7 @@ else
     echo "→ 检测到已登录的 gh CLI，自动创建仓库 ${USER_NAME}/${REPO_NAME} ..."
     gh repo create "${USER_NAME}/${REPO_NAME}" \
       --public \
-      --description "安卓二进制悬浮窗：点一下把剪切板里的 0/1 串翻译成文字（全部由 AI 制作）" \
+      --description "安卓编码悬浮窗：点一下在文字 / 二进制 / HEX / Base64 之间互转，自动识别方向（全部由 AI 制作）" \
       --source . \
       --remote origin \
       --push || true

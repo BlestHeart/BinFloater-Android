@@ -283,7 +283,7 @@ public class FloatingService extends Service {
             PendingIntent stopPi = PendingIntent.getService(this, 2, stop,
                     PendingIntent.FLAG_IMMUTABLE);
             Notification n = new Notification.Builder(this, CHANNEL_ID)
-                    .setContentTitle("二进制悬浮窗运行中")
+                    .setContentTitle("编码悬浮窗运行中")
                     .setContentText("点按悬浮球打开转换面板")
                     .setSmallIcon(android.R.drawable.ic_menu_edit)
                     .setContentIntent(pi)
@@ -1108,7 +1108,7 @@ public class FloatingService extends Service {
         panelHead = head;
 
         TextView title = new TextView(this);
-        title.setText("二进制悬浮窗");
+        title.setText("编码悬浮窗");
         title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
         title.setTextColor(pal.text);
         title.setTypeface(Typeface.DEFAULT_BOLD);

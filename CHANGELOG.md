@@ -25,9 +25,11 @@
 
 ## 2.5
 
-**2026-10-28 · versionCode 5 / versionName 2.5 · 243 项断言**
+**2026-10-28 · versionCode 5 / versionName 2.5 · 257 项断言**
 
 加了一个功能：**App 自己能查到新版本，并且直接装上**。
+顺手把名字从「二进制悬浮窗」改成「**编码悬浮窗**」——早就不止二进制了（Base64 双向、HEX 输出、
+方向自动识别、五种显示格式），名字和简介一直是旧的。
 
 ### 怎么用
 
@@ -38,8 +40,11 @@
 
 - `VersionUtil.java`：版本号比较。按数字逐段比，不是字典序（`2.10` > `2.9`）；
   解析不出数字就当「没更新」，宁可不提示也不误报。纯字符串处理，能桌面单测。
-- `UpdateChecker.java`：读 `releases/latest` 的 `tag_name` 和第一个 `.apk` 附件地址；
-  下载有 64 MB 上限，失败删半截文件；404 单独翻译成「仓库还没公开」，403 是「被限流」。
+- `UpdateChecker.java`：请求网页 `releases/latest`，从 302 的 `Location` 里抠出 tag，
+  APK 地址由 tag 直接拼（`<repo>/releases/download/<tag>/BinFloater.apk`）；下载有 64 MB 上限，
+  失败删半截文件；404 翻译成「仓库还没发过版」。
+  **为什么不打 `api.github.com`**：那个接口未认证每小时只有 60 次、按 IP 算，共享出口（代理、
+  运营商 CGNAT）经常整个 IP 池 `remaining=0`，稳定 403——仓库刚公开就踩到了。网页重定向不限流。
 - `ApkProvider.java`：极简 `ContentProvider`，只放行 `update.apk` 一个文件、只读打开。
   没有 AndroidX 就没有 `FileProvider`，而 `file://` 在 `targetSdk` 24+ 会抛
   `FileUriExposedException`，所以自己写一个够用的最小版本。
@@ -53,8 +58,7 @@
 
 ### 行为细节
 
-- 查版本走 `releases/latest` 的**网页重定向**，不打 `api.github.com`（那个接口未认证每小时 60 次、按 IP 算，
-  共享出口会被限流成 403）；不解析 JSON、不依赖 `org.json`
+- 查版本走 `releases/latest` 的**网页重定向**，不打 `api.github.com`；不解析 JSON、不依赖 `org.json`
 - 自动检查**静默失败**：国内直连 `github.com` 常超时，每次开 App 弹一句「检查失败」纯属噪音；
   只有手动点才显示失败原因
 - 下载用 `applicationContext`，转屏重建不会中断；下载状态是 static，重建后界面不会假装「没开始」
