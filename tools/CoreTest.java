@@ -186,6 +186,24 @@ public class CoreTest {
         check("parse 抠不出返回 null", VersionUtil.parse("v") == null);
         check("parse 认 v 前缀", VersionUtil.parse("v2.4") != null && VersionUtil.parse("v2.4").length == 2);
 
+        System.out.println("== 11. 从重定向地址抠 tag（检查更新用） ==");
+        // releases/latest 会 302 到 .../releases/tag/v2.5，tag 就在最后一段。
+        // 走这条路而不是 api.github.com：API 未认证每小时只有 60 次且按 IP 算，
+        // 共享出口经常被限流成 403；网页重定向不限流。
+        eq("标准重定向地址",
+                VersionUtil.parseTag("https://github.com/BlestHeart/BinFloater-Android/releases/tag/v2.5"),
+                "v2.5");
+        eq("带查询串", VersionUtil.parseTag("https://github.com/o/r/releases/tag/v2.4?x=1"), "v2.4");
+        eq("带锚点", VersionUtil.parseTag("https://github.com/o/r/releases/tag/v2.3#notes"), "v2.3");
+        eq("带尾斜杠", VersionUtil.parseTag("https://github.com/o/r/releases/tag/v2.2/"), "v2.2");
+        eq("不是 tag 地址返回 null",
+                VersionUtil.parseTag("https://github.com/o/r/releases/latest"), null);
+        eq("null 安全", VersionUtil.parseTag(null), null);
+        eq("空 tag 返回 null", VersionUtil.parseTag("https://github.com/o/r/releases/tag/"), null);
+        eq("抠出来的 tag 能直接比版本",
+                VersionUtil.isNewer(VersionUtil.parseTag(
+                        "https://github.com/o/r/releases/tag/v2.10"), "2.9") ? 1 : 0, 1);
+
         System.out.println();
         System.out.println("结果：通过 " + pass + " 项，失败 " + fail + " 项");
         if (fail > 0) System.exit(1);

@@ -295,9 +295,18 @@ public class StaticAudit {
         check("下载用 applicationContext", mainCode.contains("getApplicationContext()"), "");
         check("下载失败删半截文件", updCode.contains("out.delete()"), "");
         check("下载有大小上限", updCode.contains("MAX_APK_BYTES"), "");
-        check("请求带 User-Agent", updCode.contains("\"User-Agent\""), "GitHub API 不带 UA 会 403");
-        check("404 和 403 分别提示",
-                updCode.contains("404") && updCode.contains("403"), "");
+        check("请求带 User-Agent", updCode.contains("\"User-Agent\""), "");
+        check("404 有专门提示", updCode.contains("没有找到 Release"), "");
+        // 31) 查版本走网页重定向，不打 api.github.com
+        check("走 releases/latest 重定向", updCode.contains("REPO + \"/releases/latest\""), "");
+        check("代码里没有 api.github.com", !updCode.contains("api.github.com"),
+                "API 未认证每小时 60 次、按 IP 算，共享出口会被限流成 403");
+        check("不依赖 org.json", !updCode.contains("org.json"), "");
+        check("手动接管重定向", updCode.contains("setInstanceFollowRedirects(false)"),
+                "默认会自动跟到最终页，就拿不到 Location 了");
+        check("APK 地址由 tag 拼出", updCode.contains("\"/releases/download/\""), "");
+        check("tag 解析在 VersionUtil 里（可桌面单测）",
+                verCode.contains("public static String parseTag"), "");
         // 28) 安装：必须走 content://（file:// 在 targetSdk 24+ 直接抛 FileUriExposedException）
         check("安装走 content URI", mainCode.contains("ApkProvider.uri()"), "");
         check("代码里没有 file:// URI", !mainCode.contains("file://"),

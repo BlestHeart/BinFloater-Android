@@ -69,6 +69,30 @@ public final class VersionUtil {
         return compare(a, b) > 0;
     }
 
+    /**
+     * 从 `releases/latest` 的重定向地址里抠出 tag。
+     *
+     * `https://github.com/o/r/releases/latest` 会 302 到
+     * `https://github.com/o/r/releases/tag/v2.5`，tag 就在最后一段。
+     *
+     * 为什么不查 api.github.com：那个接口**未认证每小时只有 60 次、按 IP 算**，
+     * 手机走运营商 CGNAT、或者挂着共享代理，很容易整个 IP 池被限流，直接 403。
+     * 而网页的重定向没有任何限流，也不需要解析 JSON。
+     */
+    public static String parseTag(String location) {
+        if (location == null) return null;
+        int i = location.indexOf("/releases/tag/");
+        if (i < 0) return null;
+        String tag = location.substring(i + "/releases/tag/".length());
+        int cut = tag.length();
+        for (int k = 0; k < tag.length(); k++) {
+            char c = tag.charAt(k);
+            if (c == '?' || c == '#' || c == '/') { cut = k; break; }
+        }
+        tag = tag.substring(0, cut).trim();
+        return tag.isEmpty() ? null : tag;
+    }
+
     private static boolean isDigit(char c) {
         return c >= '0' && c <= '9';
     }
