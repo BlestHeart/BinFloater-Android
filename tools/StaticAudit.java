@@ -361,6 +361,14 @@ public class StaticAudit {
         check("镜像链里有 jsDelivr", updCode.contains("jsdelivr.net"), "");
         check("镜像链里有 gh-proxy", updCode.contains("gh-proxy.com"), "");
         check("镜像链按序逐个试", updCode.contains("for (String u : VERSION_URLS)"), "");
+        // 32) 多个镜像必须比版本、取最大的那份：jsDelivr 对 @main 有约 12 小时缓存，
+        //     「第一个成功就停」会在刚发版的半天里把新版本吞掉（v2.6→v2.9 实际踩过）
+        check("多镜像取版本最大的那份",
+                updCode.contains("got.versionCode > info.versionCode"),
+                "CDN 缓存旧清单时，先应答的源会盖住真正的新版本");
+        check("不能被 CDN 的旧清单卡住",
+                updCode.contains("!u.contains(\"jsdelivr\")"),
+                "GitHub 原文不缓存，拿到就该提前收工");
         check("APK 也走镜像（不是只有清单走）", updCode.contains("apkUrlsFor"), "");
         check("APK 下载按候选依次重试", updCode.contains("for (String u : urls)"), "");
         check("全镜像失败才退回 github 重定向", updCode.contains("checkByRedirect"), "");

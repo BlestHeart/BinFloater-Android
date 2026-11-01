@@ -60,12 +60,12 @@ d8 --min-api 34 --output build/dex build/classes/**/*.class
 bash run_tests.sh
 ```
 
-两组共累计 441 项：
+两组共累计 443 项：
 
 | 组 | 项数 | 测什么 |
 |---|---|---|
 | 编解码核心 | 247 | `BinCore` 的双向转换、分隔符、编码回退、阈值判定、长度上限、hex 不截断、Base64 编解码与判定、摩斯码与中文电码、播放节奏；`Ccc` 的双向查表；`VersionUtil` 的版本号比较与 version.json 解析 |
-| 静态审查 | 194 | 读源码做约束检查（见下） |
+| 静态审查 | 196 | 读源码做约束检查（见下） |
 
 ### 为什么有「静态审查」这一组
 
@@ -445,7 +445,7 @@ app/
     ApkProvider.java           极简 ContentProvider，把 APK 交给安装器
 tools/
   CoreTest.java                247 项编解码 + 电码表 + 播放节奏 + 版本号 + version.json 解析测试
-  StaticAudit.java             194 项源码约束检查
+  StaticAudit.java             196 项源码约束检查
   push_github.sh               推送脚本
 signing/
   README.md                    密钥说明（密钥本身不进 git）
@@ -537,7 +537,7 @@ v2.0 的改动：
 | APK 大小 | 8.1 MB | 29 KB |
 | `classes.dex` | 105 KB | 29 KB |
 | 源文件 | 9 个 | 3 个 |
-| 测试断言 | 467 项 | 80 项（当前 441） |
+| 测试断言 | 467 项 | 80 项（当前 443） |
 | 权限 | 6 个（含 INTERNET） | 4 个 |
 
 输入法代码全部在 git 历史里（v1.2 的 tag/commit），需要的话能翻出来。

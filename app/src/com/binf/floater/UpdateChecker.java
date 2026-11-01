@@ -65,13 +65,16 @@ public final class UpdateChecker {
             "https://raw.githubusercontent.com/" + OWNER_REPO + "/main/" + VERSION_JSON;
 
     /**
-     * version.json 的镜像候选，**按顺序试，第一个解析成功的算数**。
+     * version.json 的镜像候选：**全部问一遍，取 versionCode 最大的那份**。
      *
      * 顺序是按国内实测的「能通 + 快」排的：jsDelivr 三个入口在前，
-     * gh-proxy 其次，直连最后。jsDelivr 对分支有约 12 小时缓存，
-     * 所以刚发版那半天可能还读到上一版 —— 24 小时才自动查一次，
-     * 这个延迟可以接受；急着确认的用户会手动点「检查更新」，
-     * 那时如果 jsDelivr 还是旧的，后面的 gh-proxy 会给出最新的。
+     * gh-proxy 其次，直连最后。
+     *
+     * 为什么不是「第一个成功就停」：jsDelivr 对分支（@main）有约 12 小时缓存，
+     * 刚发版那半天它返回的还是上一版。如果第一个应答就算数，那这半天里
+     * 所有走 jsDelivr 的用户都会被告诉「已是最新」—— 这正是 v2.6 发版后
+     * 发生过的事。所以现在把每个源的 versionCode 比一遍，取最大的；
+     * 拿到 GitHub 原文（gh-proxy / raw，内容不可缓存、永远是最新）就提前停。
      */
     public static final String[] VERSION_URLS = {
             "https://testingcf.jsdelivr.net/gh/" + OWNER_REPO + "@main/" + VERSION_JSON,
@@ -180,19 +183,32 @@ public final class UpdateChecker {
                 Info info = null;
                 String err = null;
                 for (String u : VERSION_URLS) {
+                    Info got = null;
                     try {
-                        Info got = parseVersionJson(getText(u), u);
-                        if (got != null) {
-                            info = got;
-                            break;
-                        }
-                        err = "版本清单格式不对";
+                        got = parseVersionJson(getText(u), u);
                     } catch (Exception e) {
                         // 超时 / DNS / SSL / 404 都走这里，继续试下一个源
                         err = e.getClass().getSimpleName();
                     }
+                    if (got == null) {
+                        if (err == null) err = "版本清单格式不对";
+                        continue;
+                    }
+                    // 取 versionCode 最大的那份：CDN 可能还在发上一版的缓存
+                    if (info == null || got.versionCode > info.versionCode) {
+                        info = got;
+                    }
+                    // GitHub 原文（gh-proxy / raw）不缓存，拿到的就是最新的，不必再等
+                    if (!u.contains("jsdelivr") && got.versionCode > 0) {
+                        info = got;
+                        err = null;
+                        break;
+                    }
                 }
-                if (info == null) {
+                if (info != null) {
+                    // 有结果了就别再把中途某个源超时的错误带给界面
+                    err = null;
+                } else {
                     // 镜像全挂：退回老的重定向路径，能直连 GitHub 的网络还能查到
                     Info legacy = checkByRedirect();
                     if (legacy != null) {

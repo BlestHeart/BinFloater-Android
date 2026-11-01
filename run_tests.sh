@@ -76,7 +76,7 @@ rm -rf build/r_audit && mkdir -p build/r_audit
 "$JAVAC" -encoding UTF-8 -d build/r_audit \
   app/src/com/binf/floater/BinCore.java app/src/com/binf/floater/Ccc.java \
   tools/StaticAudit.java 2>&1 | head -3
-run "静态审查" 194 "$JAVA" -Dfile.encoding=UTF-8 -cp build/r_audit com.binf.floater.StaticAudit
+run "静态审查" 196 "$JAVA" -Dfile.encoding=UTF-8 -cp build/r_audit com.binf.floater.StaticAudit
 
 echo ""
 echo "════════════════════════════════════════"
