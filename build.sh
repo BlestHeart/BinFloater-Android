@@ -16,8 +16,8 @@ APK_NAME="BinFloater.apk"
 PKG="com.binf.floater"
 MIN_SDK=34
 TARGET_SDK=36
-VERSION_CODE=5
-VERSION_NAME="2.5"
+VERSION_CODE=6
+VERSION_NAME="2.6"
 
 echo "==> 清理"
 rm -rf "$OUT/gen" "$OUT/classes" "$OUT/dex" "$OUT/flat" "$OUT/base.apk" "$OUT/$APK_NAME"
@@ -99,6 +99,21 @@ echo "==> 7/7 apksigner 签名"
 echo "==> 验证签名"
 "$BT/apksigner.bat" verify --print-certs "$OUT/$APK_NAME" | head -6
 
+echo "==> 同步 dist/ 并生成 version.json"
+# dist/BinFloater.apk 要进 git：App 内检查更新在国内只能靠 jsDelivr 镜像，
+# 而 jsDelivr 只能取仓库里的文件。按 tag 取（@v2.6/...）时缓存是不可变的。
+mkdir -p "$PROJ/dist"
+cp "$OUT/$APK_NAME" "$PROJ/dist/$APK_NAME"
+cat > "$PROJ/version.json" <<EOF
+{
+  "versionCode": $VERSION_CODE,
+  "versionName": "$VERSION_NAME",
+  "tag": "v$VERSION_NAME",
+  "apkPath": "dist/BinFloater.apk"
+}
+EOF
+
 echo
 echo "✅ 构建完成: $OUT/$APK_NAME"
-ls -lh "$OUT/$APK_NAME"
+ls -lh "$OUT/$APK_NAME" "$PROJ/dist/$APK_NAME"
+echo "   version.json → versionCode=$VERSION_CODE versionName=$VERSION_NAME"

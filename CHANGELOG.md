@@ -13,6 +13,7 @@
 
 | 版本 | versionCode | 日期 | 一句话 |
 |---|---|---|---|
+| [2.6](#26) | 6 | 2026-11-01 | 检查更新改走国内镜像（jsDelivr / gh-proxy），不挂梯子也能查 |
 | [2.5](#25) | 5 | 2026-10-28 | App 内检查更新：查 GitHub Releases、下载 APK、拉起系统安装器 |
 | [2.4](#24) | 4 | 2026-10-25 | 标题栏拆成「方向 / 编码」两个按钮，方向自动识别成为显式一档 |
 | [2.3](#23) | 3 | 2026-10-25 | 五项功能：球外观 / 历史 / 面板拖动 / Base64 / 深浅色主题 |
@@ -20,6 +21,49 @@
 | [2.1](#21) | 2（未升） | 2026-10-23 | 面板的 `✕` 只收面板，服务死了开关状态跟着回落 |
 | [2.0](#20) | 2 | 2026-10-23 | 从输入法改成纯悬浮窗，APK 8.1 MB → 29 KB |
 | [1.x](#1x) | 1 | 2026-10-22 | 已废弃：安卓输入法 BinIME |
+
+---
+
+## 2.6
+
+**2026-11-01 · versionCode 6 / versionName 2.6 · 278 项断言**
+
+修一个「功能在国内等于不存在」的问题：**检查更新在没梯子的网络里查不到**。
+
+### 原来的问题
+
+v2.5 的检查更新是「跟 `github.com/.../releases/latest` 的 302 重定向，从 `Location` 里抠 tag」。
+本机开着代理所以一切正常，但无代理实测：`github.com`、`api.github.com`、`raw.githubusercontent.com`
+**全部超时或 SSL 失败**。也就是说国内用户点「检查更新」永远只能看到一句失败。
+
+### 改法
+
+- 仓库根加一个静态 **`version.json`**（`versionCode` / `versionName` / `tag` / `apkPath` 四行），
+  由 `build.sh` 每次构建自动重写，和 `dist/BinFloater.apk` 一起提交
+- App 读它，**按顺序试一串镜像**：`testingcf.jsdelivr.net` → `gcore.jsdelivr.net` →
+  `jsdelivr.b-cdn.net` → `gh-proxy.com` → 直连 raw。实测前三个 1.3–3.9s 通
+- APK 下载同样走镜像：jsDelivr 按 `@<tag>` 取仓库副本（不可变，不会给旧包），
+  再退 gh-proxy / 直连 Releases
+- 镜像全挂才退回老的 `releases/latest` 重定向，给开了代理的网络兜底
+- 解析不引 `org.json`，改用 `VersionUtil.jsonString` / `jsonInt`（手写 60 行），
+  这样「解析 version.json」这段能像版本号比较一样在桌面 JVM 上跑单测
+
+### 为什么必须换静态文件
+
+`gh-proxy.com` 会把**网页**挡掉：请求它转发 `releases/latest` 返回 200，但正文只有 77 字节
+`Web page content is not allowed. This service is for resource downloads only.`
+「抠 Location 拿 tag」这条路在镜像下根本走不通。
+
+### 注意
+
+**已经装在手机上的 v2.5 及更早版本仍然直连 `github.com`**，没梯子查不到更新 ——
+这次的修只能靠手动装一次 v2.6，之后才走镜像。
+
+### 顺带修的工具链 bug
+
+`tools/StaticAudit.java` 的 `stripComments()` 以前按行「遇到第一个 `//` 就截断」，
+于是代码里所有 `"https://..."` 字面量都被砍掉域名 —— 任何针对 URL 的断言都恒假。
+改成逐字符扫（认得字符串/字符字面量与转义）后，新加的镜像链断言才真正生效。
 
 ---
 

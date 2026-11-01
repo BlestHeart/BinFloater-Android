@@ -296,17 +296,29 @@ public class StaticAudit {
         check("下载失败删半截文件", updCode.contains("out.delete()"), "");
         check("下载有大小上限", updCode.contains("MAX_APK_BYTES"), "");
         check("请求带 User-Agent", updCode.contains("\"User-Agent\""), "");
-        check("404 有专门提示", updCode.contains("没有找到 Release"), "");
-        // 31) 查版本走网页重定向，不打 api.github.com
-        check("走 releases/latest 重定向", updCode.contains("REPO + \"/releases/latest\""), "");
+        // 31) 查版本：国内连不上 github.com，主路径读静态 version.json + 一串镜像回退
+        check("镜像返回非 200 当失败", updCode.contains("\"HTTP \""), "");
+        check("读静态版本清单", updCode.contains("\"version.json\""), "");
+        check("清单地址有镜像链", updCode.contains("String[] VERSION_URLS"), "");
+        check("镜像链里有 jsDelivr", updCode.contains("jsdelivr.net"), "");
+        check("镜像链里有 gh-proxy", updCode.contains("gh-proxy.com"), "");
+        check("镜像链按序逐个试", updCode.contains("for (String u : VERSION_URLS)"), "");
+        check("APK 也走镜像（不是只有清单走）", updCode.contains("apkUrlsFor"), "");
+        check("APK 下载按候选依次重试", updCode.contains("for (String u : urls)"), "");
+        check("全镜像失败才退回 github 重定向", updCode.contains("checkByRedirect"), "");
         check("代码里没有 api.github.com", !updCode.contains("api.github.com"),
                 "API 未认证每小时 60 次、按 IP 算，共享出口会被限流成 403");
-        check("不依赖 org.json", !updCode.contains("org.json"), "");
+        check("不依赖 org.json", !updCode.contains("org.json"),
+                "解析改走 VersionUtil，这样这段逻辑能桌面单测");
         check("手动接管重定向", updCode.contains("setInstanceFollowRedirects(false)"),
                 "默认会自动跟到最终页，就拿不到 Location 了");
         check("APK 地址由 tag 拼出", updCode.contains("\"/releases/download/\""), "");
         check("tag 解析在 VersionUtil 里（可桌面单测）",
                 verCode.contains("public static String parseTag"), "");
+        // 32) 镜像只能取仓库里的文件，所以 dist 那个 APK 必须真的进 git
+        check("dist APK 没被 gitignore 掉（否则镜像取不到）",
+                read(".gitignore").contains("!/dist/BinFloater.apk"),
+                "jsDelivr 只读仓库内容，APK 不进 git 镜像这条路就断了");
         // 28) 安装：必须走 content://（file:// 在 targetSdk 24+ 直接抛 FileUriExposedException）
         check("安装走 content URI", mainCode.contains("ApkProvider.uri()"), "");
         check("代码里没有 file:// URI", !mainCode.contains("file://"),
@@ -355,18 +367,46 @@ public class StaticAudit {
         return src.substring(start, Math.min(src.length(), end + 2));
     }
 
-    /** 去掉 // 注释行，避免注释里提到关键字影响计数。 */
+    /**
+     * 去掉 // 与 /\* ... *\/ 注释，避免注释里提到关键字影响计数。
+     *
+     * 只按行去 // 是不够的（注释里大量写着「以前这里写的是 xxx」，反向断言会命中历史代码），
+     * 但**更不能简单地按第一个 "//" 截断** —— 代码里到处是 "https://..."，
+     * 那样会把字符串里的域名整段砍掉，于是所有针对 URL 的断言都恒假
+     * （曾因此把「镜像链里有没有 jsDelivr」误判成没有）。
+     *
+     * 这里逐字符扫，认得字符串字面量、字符字面量和反斜杠转义。
+     */
     static String stripComments(String src) {
-        // 先把块注释 /* ... */ 整段抹掉，再逐行去 //。
-        // 只去 // 是不够的：代码里大量注释在讲「以前这里写的是 xxx」，
-        // 反向断言（!contains）会命中注释里那串历史代码，把已经修好的东西判成没修。
-        String noBlock = src.replaceAll("(?s)/\\*.*?\\*/", "");
-        StringBuilder sb = new StringBuilder();
-        for (String line : noBlock.split("\n")) {
-            int idx = line.indexOf("//");
-            sb.append(idx >= 0 ? line.substring(0, idx) : line).append('\n');
+        StringBuilder out = new StringBuilder(src.length());
+        int n = src.length();
+        boolean inStr = false, inChr = false, inLine = false, inBlock = false;
+        for (int i = 0; i < n; i++) {
+            char c = src.charAt(i);
+            char next = i + 1 < n ? src.charAt(i + 1) : '\0';
+            if (inLine) {
+                if (c == '\n') { inLine = false; out.append('\n'); }
+                continue;
+            }
+            if (inBlock) {
+                if (c == '*' && next == '/') { inBlock = false; i++; }
+                else if (c == '\n') out.append('\n');
+                continue;
+            }
+            if (inStr || inChr) {
+                out.append(c);
+                if (c == '\\' && i + 1 < n) { out.append(src.charAt(++i)); continue; }
+                if (inStr && c == '"') inStr = false;
+                else if (inChr && c == '\'') inChr = false;
+                continue;
+            }
+            if (c == '/' && next == '/') { inLine = true; i++; continue; }
+            if (c == '/' && next == '*') { inBlock = true; i++; continue; }
+            if (c == '"') inStr = true;
+            else if (c == '\'') inChr = true;
+            out.append(c);
         }
-        return sb.toString();
+        return out.toString();
     }
 
     /** 取某个方法（含签名）之后的一整段代码，括号配平为止。找不到返回空串。 */

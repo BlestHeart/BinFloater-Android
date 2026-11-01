@@ -204,6 +204,33 @@ public class CoreTest {
                 VersionUtil.isNewer(VersionUtil.parseTag(
                         "https://github.com/o/r/releases/tag/v2.10"), "2.9") ? 1 : 0, 1);
 
+        System.out.println("== 12. 解析 version.json（国内镜像那条路） ==");
+        // 仓库根目录的 version.json 是 build.sh 生成的四行固定格式。
+        // 国内连不上 github.com，所以检查更新改成读这个静态文件 + 一串镜像回退。
+        String manifest = "{\n"
+                + "  \"versionCode\": 6,\n"
+                + "  \"versionName\": \"2.6\",\n"
+                + "  \"tag\": \"v2.6\",\n"
+                + "  \"apkPath\": \"dist/BinFloater.apk\"\n"
+                + "}";
+        eq("取字符串字段", VersionUtil.jsonString(manifest, "versionName"), "2.6");
+        eq("取带 v 的 tag", VersionUtil.jsonString(manifest, "tag"), "v2.6");
+        eq("取路径字段", VersionUtil.jsonString(manifest, "apkPath"), "dist/BinFloater.apk");
+        eq("取整数字段", VersionUtil.jsonInt(manifest, "versionCode"), 6);
+        eq("整数写成字符串也认",
+                VersionUtil.jsonInt("{\"versionCode\": \"7\"}", "versionCode"), 7);
+        eq("缺字段返回 null", VersionUtil.jsonString(manifest, "notes"), null);
+        eq("缺整数返回 -1", VersionUtil.jsonInt(manifest, "notes"), -1);
+        eq("字段名是别的字段的前缀时不能串",
+                VersionUtil.jsonString("{\"versionCodeX\": \"9\", \"versionCode\": 6}", "versionCode"), "6");
+        eq("没冒号返回 null", VersionUtil.jsonString("{\"tag\" \"v2.6\"}", "tag"), null);
+        eq("null 安全", VersionUtil.jsonString(null, "tag"), null);
+        eq("键为 null 安全", VersionUtil.jsonString(manifest, null), null);
+        eq("末尾没逗号也能取",
+                VersionUtil.jsonString("{\"tag\":\"v9.9\"}", "tag"), "v9.9");
+        check("解析出来的版本能比大小",
+                VersionUtil.isNewer(VersionUtil.jsonString(manifest, "versionName"), "2.5"));
+
         System.out.println();
         System.out.println("结果：通过 " + pass + " 项，失败 " + fail + " 项");
         if (fail > 0) System.exit(1);

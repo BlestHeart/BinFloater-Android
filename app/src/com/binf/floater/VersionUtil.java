@@ -93,6 +93,79 @@ public final class VersionUtil {
         return tag.isEmpty() ? null : tag;
     }
 
+    /**
+     * 从 version.json 这种**固定格式的极简 JSON** 里取字符串字段。
+     *
+     * `{"versionName": "2.6"}` → `2.6`；找不到返回 null。
+     *
+     * 为什么不引 org.json：version.json 是 build.sh 自己生成的，就四行，
+     * 没有嵌套、没有数组、没有转义。手写这几行换来的是 —— 这段逻辑不碰
+     * android.*，能像 {@link #parseTag} 一样在桌面 JVM 上跑单测。
+     */
+    public static String jsonString(String json, String key) {
+        String raw = jsonRaw(json, key);
+        if (raw == null) return null;
+        if (raw.length() >= 2 && raw.charAt(0) == '"' && raw.charAt(raw.length() - 1) == '"') {
+            return raw.substring(1, raw.length() - 1);
+        }
+        return raw;
+    }
+
+    /** 取整数字段，允许写成 `5` 或 `"5"`；找不到或不是数字返回 -1。 */
+    public static int jsonInt(String json, String key) {
+        String s = jsonString(json, key);
+        if (s == null) return -1;
+        try {
+            return Integer.parseInt(s.trim());
+        } catch (NumberFormatException e) {
+            return -1;
+        }
+    }
+
+    /**
+     * 抠出 `"key":` 后面那个值（保留引号），找不到返回 null。
+     * 值只取到逗号 / 右花括号 / 行尾为止。
+     */
+    private static String jsonRaw(String json, String key) {
+        if (json == null || key == null || key.isEmpty()) return null;
+        String needle = "\"" + key + "\"";
+        int i = json.indexOf(needle);
+        if (i < 0) return null;
+        int k = i + needle.length();
+        while (k < json.length() && Character.isWhitespace(json.charAt(k))) k++;
+        if (k >= json.length() || json.charAt(k) != ':') return null;
+        k++;
+        while (k < json.length() && Character.isWhitespace(json.charAt(k))) k++;
+        if (k >= json.length()) return null;
+        if (json.charAt(k) == '"') {
+            // 带引号：读到下一个未转义的引号
+            StringBuilder sb = new StringBuilder();
+            sb.append('"');
+            for (k++; k < json.length(); k++) {
+                char c = json.charAt(k);
+                if (c == '\\' && k + 1 < json.length()) {
+                    sb.append(json.charAt(++k));
+                    continue;
+                }
+                if (c == '"') {
+                    sb.append('"');
+                    return sb.toString();
+                }
+                sb.append(c);
+            }
+            return null;
+        }
+        // 不带引号：读到分隔符为止
+        int start = k;
+        while (k < json.length()) {
+            char c = json.charAt(k);
+            if (c == ',' || c == '}' || c == '\n' || c == '\r') break;
+            k++;
+        }
+        String raw = json.substring(start, k).trim();
+        return raw.isEmpty() ? null : raw;
+    }
+
     private static boolean isDigit(char c) {
         return c >= '0' && c <= '9';
     }

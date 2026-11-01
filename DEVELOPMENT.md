@@ -300,31 +300,86 @@ static final Pattern ZERO_B = Pattern.compile("(?i)0b");
 
 ## 检查更新
 
-思路很朴素：GitHub 的 `releases/latest` 是个现成的「最新版本号」入口，不用自己维护 manifest、不用服务器。
+思路：仓库根放一个 `version.json`（就四行），App 读它拿最新版本号。**国内不挂梯子也能用** —— 所有请求走镜像。
+
+### 为什么要镜像（v2.6）
+
+v2.5 的检查更新是「跟 `releases/latest` 的 302 抠 tag」。本机开代理一切正常，但国内用户没梯子：
+
+| 地址 | 无代理实测 |
+|---|---|
+| `github.com/.../releases/latest` | 超时 10s，不通 |
+| `api.github.com/...` | 超时 10s，不通 |
+| `raw.githubusercontent.com/...` | SSL 失败 3/3 |
+| `cdn.jsdelivr.net` / `fastly.jsdelivr.net` | SSL 失败 |
+| `testingcf.jsdelivr.net` | **通，1.3–2.9s** |
+| `gcore.jsdelivr.net` | **通，1.8–3.9s** |
+| `jsdelivr.b-cdn.net` | **通，1.5–5.2s** |
+| `gh-proxy.com/<raw url>` | **通，但慢（5–10s）** |
+| `kkgithub.com` / `ghfast.top` / `ghproxy.net` / `gh.llkk.cc` | 全部失败 |
+
+更关键的发现：`gh-proxy.com` 会把**网页**挡掉 —— 请求 `gh-proxy.com/https://github.com/.../releases/latest`
+返回 200，但正文只有 77 字节：`Web page content is not allowed. This service is for resource downloads only.`
+也就是说「抠 Location 拿 tag」这条路在镜像下**根本走不通**，只能改成读一个**静态文件**。
+
+### version.json
+
+```json
+{
+  "versionCode": 6,
+  "versionName": "2.6",
+  "tag": "v2.6",
+  "apkPath": "dist/BinFloater.apk"
+}
+```
+
+由 `build.sh` 每次构建时按 `VERSION_CODE` / `VERSION_NAME` 自动重写，顺手把 `dist/BinFloater.apk` 也同步一份。
+**发版纪律变了**：以前是「打 tag + 传 Release 附件」，现在是「改版本号 → `bash build.sh` → 把
+`version.json` 和 `dist/BinFloater.apk` 一起提交 → 打 tag 推送」。忘了提交这两个文件，检查更新就永远报旧版本。
+
+`dist/*.apk` 本来在 `.gitignore` 里，v2.6 特意加了 `!/dist/BinFloater.apk` 放行这一个文件 —— jsDelivr
+只能读仓库里的内容，APK 不进 git，镜像这条路就断了。50 KB 一份，代价可以忽略。
+
+### 镜像链
+
+`UpdateChecker.VERSION_URLS`，**按顺序试，第一个解析成功的算数**：
+
+```
+1. https://testingcf.jsdelivr.net/gh/<owner>/<repo>@main/version.json
+2. https://gcore.jsdelivr.net/gh/...@main/version.json
+3. https://jsdelivr.b-cdn.net/gh/...@main/version.json
+4. https://gh-proxy.com/https://raw.githubusercontent.com/.../main/version.json
+5. https://raw.githubusercontent.com/.../main/version.json   （能直连的网络）
+```
+
+全挂才退回老办法（`checkByRedirect()`，跟 `releases/latest` 的 302 抠 tag），给开了代理的网络用。
+
+jsDelivr 对**分支**有约 12 小时缓存，所以刚发版那半天可能还读到上一版。这个延迟可以接受：
+自动检查是 24 小时一次，急着确认的用户手动点「检查更新」时，如果 jsDelivr 还旧，后面的
+gh-proxy 会给最新的。
+
+APK 下载同理，`apkUrlsFor(tag, apkPath)` 拼一串候选：
+
+```
+jsDelivr @<tag>/dist/BinFloater.apk   ×3 个入口   ← 按 tag 取，不可变，不会给旧包
+gh-proxy + releases/download/<tag>/BinFloater.apk
+直连  releases/download/<tag>/BinFloater.apk
+```
+
+**按 tag 而不是 @main 取 APK**：分支缓存会给出旧包，装上就白折腾。
 
 ### 为什么不打 api.github.com
 
-最初用的是 `api.github.com/repos/<owner>/<repo>/releases/latest`，返回一份 JSON，从里面取
-`tag_name` 和附件的 `browser_download_url`。写起来最直观，但有个致命问题：**这个接口未认证时
-每小时只有 60 次，而且是按 IP 算的**。
+最初用的是 `api.github.com/repos/<owner>/<repo>/releases/latest`。写起来最直观，但有个致命问题：
+**未认证时每小时只有 60 次，而且按 IP 算**。仓库刚公开就踩到了 —— 走代理时出口 IP 是共享地址，
+`remaining` 直接是 0，稳定返回 `403 API rate limit exceeded`。手机走运营商 CGNAT 同理。
+**功能不能靠「运气好没被限流」。** 现在整条链路里没有任何 `api.github.com` 请求。
 
-仓库刚公开就踩到了 —— 本机走代理，出口 IP 是个共享地址，`remaining` 直接是 0，
-请求 `releases/latest` 稳定返回 `403 API rate limit exceeded`。手机走运营商 CGNAT 同理，
-一个 IP 后面可能挂着一整个小区。**功能不能靠「运气好没被限流」。**
+### 为什么不引 org.json
 
-改成请求网页：
-
-```
-GET https://github.com/BlestHeart/BinFloater-Android/releases/latest
-  → 302 Location: .../releases/tag/v2.5
-```
-
-tag 从 `Location` 里抠出来（`VersionUtil.parseTag`），APK 地址由 tag 直接拼：
-`<repo>/releases/download/<tag>/BinFloater.apk`（路径是固定的，不用再查附件列表）。
-
-好处：**不限流、不解析 JSON、不依赖 `org.json`**，还少一次请求。
-代价：要自己接管重定向（`setInstanceFollowRedirects(false)`，否则跟到最终页就拿不到 `Location` 了），
-并且 GitHub 偶尔会先 301 到带尾斜杠的规范地址，所以最多跟 4 跳。
+`version.json` 是 build.sh 自己生成的固定格式，四行、没有嵌套、没有数组。为它引 `org.json`
+（Android 自带，但桌面 JVM 上没有）会让「解析」这段逻辑没法单测。所以手写了
+`VersionUtil.jsonString` / `jsonInt`（约 60 行），解析逻辑就能像 `parseTag` 一样在桌面跑断言。
 
 ### 为什么版本号按字符串比，不按 versionCode
 
@@ -341,11 +396,10 @@ VersionUtil.isNewer("2.10", "2.9")   // true —— 按数字比，不是字典�
 
 ### 为什么自动检查必须静默失败
 
-国内直连 `github.com` 大概率超时（本机 `git push` 都得走代理）。如果每次打开主界面都弹一句
-「检查失败」，那就是纯噪音。所以：
+国内网络抽风是常态（镜像也会偶尔挂）。如果每次打开主界面都弹一句「检查失败」，那就是纯噪音。所以：
 
 - 自动检查（24 小时节流一次）：失败什么都不显示
-- 手动点「检查更新」：才把 `404` / 超时 / 重定向异常的原因写出来
+- 手动点「检查更新」：才把 `HTTP 404` / 超时 / 解析失败的原因写出来
 
 ### 为什么自己写 ContentProvider 而不用 FileProvider
 
@@ -363,12 +417,10 @@ VersionUtil.isNewer("2.10", "2.9")   // true —— 按数字比，不是字典�
 
 ### 这个功能依赖发版纪律
 
-`releases/latest` 只认 **正式 Release**，且必须是「最新」的那一个。所以：
-
-- 发版必须打 tag（`v2.5`），且 Release 里要挂 `.apk` 附件
-- 没打 tag 的提交查不到更新
-- 仓库是 private 时匿名请求返回 404，功能只会提示「没有找到 Release」
-- 附件名必须是 `BinFloater.apk`（`UpdateChecker.APK_NAME`），因为下载地址是按这个名拼的
+- 版本号只写在 `AndroidManifest.xml` 和 `build.sh` 两处，**两处必须一致**（`build.sh` 会把 `version.json` 一起刷新）
+- 发版必须打 tag（`v2.6`），APK 按 tag 从仓库里取
+- 忘了提交 `version.json` / `dist/BinFloater.apk`，镜像读到的还是上一版
+- 老版本 App（v2.5 及以前）的检查器只会打 `github.com`，**这次修只能靠用户手动装一次新包**
 
 ---
 
@@ -387,11 +439,11 @@ app/
     MainActivity.java          设置界面（主题 / 历史 / 球外观 / 检查更新）
     Palette.java               深浅色两套调色板
     VersionUtil.java           版本号比较（纯逻辑，可桌面单测）
-    UpdateChecker.java         查 GitHub Releases + 下载 APK
+    UpdateChecker.java         读 version.json（走镜像）+ 下载 APK
     ApkProvider.java           极简 ContentProvider，把 APK 交给安装器
 tools/
-  CoreTest.java                104 项编解码 + 版本号测试
-  StaticAudit.java             139 项源码约束检查
+  CoreTest.java                125 项编解码 + 版本号 + version.json 解析测试
+  StaticAudit.java             153 项源码约束检查
   push_github.sh               推送脚本
 signing/
   README.md                    密钥说明（密钥本身不进 git）
@@ -400,6 +452,8 @@ run_tests.sh                   一键回归
 README.md                      项目首页（面向使用者）
 DEVELOPMENT.md                 本文件（面向开发者）
 CHANGELOG.md                   更新日志（每个版本改了什么）
+version.json                   最新版本清单（检查更新读它，build.sh 生成）
+dist/BinFloater.apk            仓库内 APK 副本（给 jsDelivr 镜像用，唯一进 git 的 APK）
 ```
 
 ---
@@ -411,7 +465,8 @@ CHANGELOG.md                   更新日志（每个版本改了什么）
 | 进 git | 不进 git |
 |---|---|
 | 源码、资源、清单 | `build/` 全部中间产物 |
-| `build.sh` / `run_tests.sh` | `dist/*.apk`（纯二进制，dex 一变整份存） |
+| `build.sh` / `run_tests.sh` | `dist/*.apk` 里**除 `BinFloater.apk` 之外**的历史包（纯二进制，dex 一变整份存） |
+| `version.json` + `dist/BinFloater.apk`（镜像要读仓库里的文件，见「检查更新」） | |
 | `tools/` 下测试与脚本 | `signing/*.keystore`（签名密钥） |
 | `README.md` / `DEVELOPMENT.md` / `CHANGELOG.md` / `LICENSE` | `.idea/`、`.vscode/`、`__pycache__/` |
 

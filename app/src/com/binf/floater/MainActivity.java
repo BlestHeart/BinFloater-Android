@@ -280,7 +280,8 @@ public class MainActivity extends Activity {
         LinearLayout dataCard = makeCard();
         TextView dataNote = new TextView(this);
         dataNote.setText("转换历史、球的位置、外观设置都只存在本机，不上传任何东西。"
-                + "App 只在「检查更新」时访问一次 GitHub，用来读版本号和下载本 App 自己的 APK。");
+                + "App 只在「检查更新」时读一个静态版本清单（国内走 jsDelivr / gh-proxy 镜像，"
+                + "不挂梯子也能用），并从 GitHub Releases 或镜像下载本 App 自己的 APK。");
         dataNote.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11);
         dataNote.setTextColor(pal.muted);
         dataCard.addView(dataNote);
@@ -778,7 +779,7 @@ public class MainActivity extends Activity {
         String tag = updInfo == null ? "" : updInfo.tag;
         switch (updState) {
             case UPD_CHECKING:
-                updStatus.setText("正在查 GitHub 上的最新版本…");
+                updStatus.setText("正在查最新版本…");
                 updBtn.setText("检查中…");
                 updBtn.setEnabled(false);
                 break;
@@ -810,8 +811,8 @@ public class MainActivity extends Activity {
             case UPD_IDLE:
             default:
                 // 版本号上面那行已经有了，这里不重复，只说清楚「更新是怎么来的」
-                updStatus.setText("更新包从 GitHub Releases 下载，只下载本 App 自己的 APK，"
-                        + "装完设置和悬浮窗位置都还在。");
+                updStatus.setText("更新包从 GitHub Releases 下载（走国内镜像，不用梯子），"
+                        + "只下载本 App 自己的 APK，装完设置和悬浮窗位置都还在。");
                 updBtn.setText("检查更新");
                 updBtn.setEnabled(true);
                 break;
@@ -839,8 +840,8 @@ public class MainActivity extends Activity {
     /**
      * 打开主界面时顺手查一次，24 小时节流。
      *
-     * 静默失败：国内直连 api.github.com 经常超时，每次开 App 弹一句「检查失败」
-     * 纯属噪音。只有用户自己点「检查更新」才把失败原因显示出来。
+     * 静默失败：镜像偶尔也会抽风，每次开 App 弹一句「检查失败」纯属噪音。
+     * 只有用户自己点「检查更新」才把失败原因显示出来。
      */
     private void maybeAutoCheckUpdate() {
         if (updState == UPD_CHECKING || updState == UPD_DOWNLOADING || updState == UPD_READY) return;
@@ -883,7 +884,8 @@ public class MainActivity extends Activity {
         new Thread(new Runnable() {
             @Override
             public void run() {
-                java.io.File f = UpdateChecker.download(app, info.apkUrl, new UpdateChecker.Progress() {
+                // 传 Info 而不是单个地址：内部会按镜像候选依次重试
+                java.io.File f = UpdateChecker.download(app, info, new UpdateChecker.Progress() {
                     @Override
                     public void onProgress(final int percent) {
                         final MainActivity c = current;
