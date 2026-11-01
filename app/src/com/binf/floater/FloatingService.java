@@ -99,6 +99,8 @@ public class FloatingService extends Service {
     private static final String DIR_BIN2TEXT = "bin2text";
     private static final String DIR_TEXT2B64 = "text2b64";
     private static final String DIR_B64TEXT = "b64text";
+    private static final String DIR_TEXT2HEX = "text2hex";
+    private static final String DIR_HEX2TEXT = "hex2text";
     private static final String DIR_TEXT2MORSE = "text2morse";
     private static final String DIR_MORSE2TEXT = "morse2text";
 
@@ -107,6 +109,7 @@ public class FloatingService extends Service {
     private static final String CODEC_BIN = "bin";
     private static final String CODEC_B64 = "b64";
     private static final String CODEC_MORSE = "morse";
+    private static final String CODEC_HEX = "hex";
 
     // ---------- 历史 ----------
     private static final int MAX_HISTORY = 20;
@@ -1433,16 +1436,17 @@ public class FloatingService extends Service {
         flushRefresh();
     }
 
-    /** 编码格式的三档循环。 */
+    /** 编码格式的四档循环：BIN → B64 → 摩斯 → HEX → BIN。 */
     private static String nextCodec(String c) {
         if (CODEC_BIN.equals(c)) return CODEC_B64;
         if (CODEC_B64.equals(c)) return CODEC_MORSE;
+        if (CODEC_MORSE.equals(c)) return CODEC_HEX;
         return CODEC_BIN;
     }
 
-    /** prefs 里读出来的值可能是旧版本/被外部改过的，收口到三档之内。 */
+    /** prefs 里读出来的值可能是旧版本/被外部改过的，收口到四档之内。 */
     private static String normalizeCodec(String c) {
-        if (CODEC_B64.equals(c) || CODEC_MORSE.equals(c)) return c;
+        if (CODEC_B64.equals(c) || CODEC_MORSE.equals(c) || CODEC_HEX.equals(c)) return c;
         return CODEC_BIN;
     }
 
@@ -1459,6 +1463,7 @@ public class FloatingService extends Service {
     private String shownCodec() {
         if (DIR_TEXT2B64.equals(dir) || DIR_B64TEXT.equals(dir)) return CODEC_B64;
         if (DIR_TEXT2MORSE.equals(dir) || DIR_MORSE2TEXT.equals(dir)) return CODEC_MORSE;
+        if (DIR_TEXT2HEX.equals(dir) || DIR_HEX2TEXT.equals(dir)) return CODEC_HEX;
         return CODEC_BIN;
     }
 
@@ -1467,6 +1472,7 @@ public class FloatingService extends Service {
         String c = shownCodec();
         if (CODEC_B64.equals(c)) return "Base64";
         if (CODEC_MORSE.equals(c)) return "摩斯码";
+        if (CODEC_HEX.equals(c)) return "十六进制";
         return "二进制";
     }
 
@@ -1475,12 +1481,14 @@ public class FloatingService extends Service {
         String c = shownCodec();
         if (CODEC_B64.equals(c)) return "B64";
         if (CODEC_MORSE.equals(c)) return "摩斯";
+        if (CODEC_HEX.equals(c)) return "HEX";
         return "BIN";
     }
 
     /** 正向（文字 → 编码）时 dir 该是什么。 */
     private String forwardDir() {
         if (CODEC_MORSE.equals(codec)) return DIR_TEXT2MORSE;
+        if (CODEC_HEX.equals(codec)) return DIR_TEXT2HEX;
         return CODEC_B64.equals(codec) ? DIR_TEXT2B64 : DIR_TEXT2BIN;
     }
 
@@ -1489,7 +1497,8 @@ public class FloatingService extends Service {
         if (autoDir) return;
         if (decodeDir) {
             dir = CODEC_MORSE.equals(codec) ? DIR_MORSE2TEXT
-                    : (CODEC_B64.equals(codec) ? DIR_B64TEXT : DIR_BIN2TEXT);
+                    : (CODEC_HEX.equals(codec) ? DIR_HEX2TEXT
+                    : (CODEC_B64.equals(codec) ? DIR_B64TEXT : DIR_BIN2TEXT));
         } else {
             dir = forwardDir();
         }
@@ -1498,7 +1507,7 @@ public class FloatingService extends Service {
     /** 从 dir 反推状态（历史条目点了、自动识别解出方向之后用）。 */
     private void syncFlagsFromDir() {
         decodeDir = DIR_BIN2TEXT.equals(dir) || DIR_B64TEXT.equals(dir)
-                || DIR_MORSE2TEXT.equals(dir);
+                || DIR_MORSE2TEXT.equals(dir) || DIR_HEX2TEXT.equals(dir);
         if (!autoDir) codec = shownCodec();
     }
 
@@ -1523,6 +1532,9 @@ public class FloatingService extends Service {
         } else if ("morse2text".equals(auto)) {
             decodeDir = true;
             dir = DIR_MORSE2TEXT;
+        } else if ("hex2text".equals(auto)) {
+            decodeDir = true;
+            dir = DIR_HEX2TEXT;
         } else {
             decodeDir = false;
             dir = forwardDir();
@@ -1537,6 +1549,8 @@ public class FloatingService extends Service {
             case DIR_B64TEXT:    base = "Base64 → 文字"; break;
             case DIR_TEXT2MORSE: base = "文字 → 摩斯码"; break;
             case DIR_MORSE2TEXT: base = "摩斯码 → 文字"; break;
+            case DIR_TEXT2HEX:   base = "文字 → HEX"; break;
+            case DIR_HEX2TEXT:   base = "HEX → 文字"; break;
             default:             base = "文字 → 二进制"; break;
         }
         return autoDir ? "自动识别：" + base : base;
@@ -1549,6 +1563,8 @@ public class FloatingService extends Service {
             case DIR_B64TEXT:    return "T64";
             case DIR_TEXT2MORSE: return "→摩";
             case DIR_MORSE2TEXT: return "摩→";
+            case DIR_TEXT2HEX:   return "→X";
+            case DIR_HEX2TEXT:   return "X→";
             default:             return "2B";
         }
     }
@@ -1772,6 +1788,35 @@ public class FloatingService extends Service {
                 output.setTextColor(pal.err);
                 status.setText("");
             }
+        } else if (DIR_TEXT2HEX.equals(dir)) {
+            // HEX 一个字节两个字符：字节数超过 MAX_HEX_CHARS/2 就一定超上限，
+            // 先在这里拦住，别等到主线程上拼出一个几千字符的串再报错。
+            long bytes = (long) in.getBytes(java.nio.charset.Charset.forName("UTF-8")).length;
+            if (bytes > BinCore.MAX_HEX_CHARS / 2) {
+                fullOutput = "";
+                output.setTextColor(pal.err);
+                output.setText("内容太长：" + BinCore.describe(in) + "，转成十六进制需要 "
+                        + (bytes * 2) + " 个字符，超过上限 " + BinCore.MAX_HEX_CHARS
+                        + " 个。请分段转换。");
+                status.setText("");
+                return;
+            }
+            String hex = BinCore.textToHex(in);
+            fullOutput = hex;
+            setOutput(hex, pal.accent);
+            status.setText(BinCore.describe(in) + " · HEX");
+        } else if (DIR_HEX2TEXT.equals(dir)) {
+            BinCore.DecodeResult r = BinCore.hexToText(in);
+            if (r.ok) {
+                fullOutput = r.text;
+                setOutput(r.text, pal.text);
+                status.setText(r.message);
+            } else {
+                fullOutput = "";
+                output.setText("无法解码：" + r.message);
+                output.setTextColor(pal.err);
+                status.setText("");
+            }
         } else if (DIR_MORSE2TEXT.equals(dir)) {
             BinCore.MorseResult r = BinCore.morseDecode(in);
             if (r.ok) {
@@ -1818,6 +1863,8 @@ public class FloatingService extends Service {
             case DIR_B64TEXT:    return "粘贴 Base64，下方出译文";
             case DIR_TEXT2MORSE: return "输入文字（A-Z 0-9 标点），下方出摩斯码";
             case DIR_MORSE2TEXT: return "粘贴 . - 串，字母空格、词用 /，下方出译文";
+            case DIR_TEXT2HEX:   return "输入文字，下方出十六进制";
+            case DIR_HEX2TEXT:   return "粘贴 HEX（48 65 6C 6C 6F 或 0x48656C6C6F），下方出译文";
             default:             return "输入文字，下方出二进制";
         }
     }

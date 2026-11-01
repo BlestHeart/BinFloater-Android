@@ -353,6 +353,48 @@ public class CoreTest {
         check("中文摩斯也能排节奏", cnPlan.pattern.length > 0);
         check("节奏表长度是偶数", cnPlan.pattern.length % 2 == 0);
 
+        System.out.println("== 14. 十六进制 ==");
+        eq("文字 -> HEX", BinCore.textToHex("Hi"), "48 69");
+        eq("空串", BinCore.textToHex(""), "");
+        eq("null 安全", BinCore.textToHex(null), "");
+        eq("中文 -> HEX", BinCore.textToHex("\u4f60\u597d"), "E4 BD A0 E5 A5 BD");
+        eq("HEX -> 文字", BinCore.hexToText("48 69").text, "Hi");
+        eq("HEX 解码字节数", BinCore.hexToText("48 69").bytes, 2);
+        check("HEX 说明里点出字节", BinCore.hexToText("48 69").message.contains("2 字节"));
+        eq("认 0x 前缀", BinCore.hexToText("0x48656C6C6F").text, "Hello");
+        eq("小写也认", BinCore.hexToText("48656c6c6f").text, "Hello");
+        eq("冒号分隔", BinCore.hexToText("48:65:6C:6C:6F").text, "Hello");
+        eq("逗号/下划线/短横线分隔", BinCore.hexToText("48,65_6C-6C-6F").text, "Hello");
+        eq("中文能解回", BinCore.hexToText(BinCore.textToHex("\u4f60\u597d")).text, "\u4f60\u597d");
+        eq("emoji 能解回", BinCore.hexToText(BinCore.textToHex("A\uD83D\uDE42B")).text, "A\uD83D\uDE42B");
+        eq("字母串 0x 前缀的 1 字节", BinCore.hexToBytes("FF")[0], (byte) 0xFF);
+        check("奇数位被拒", !BinCore.hexToText("486").ok);
+        check("奇数位说明里点出来", BinCore.hexToText("486").message.contains("奇数"));
+        check("非法字符被拒", !BinCore.hexToText("48 ZZ").ok);
+        check("空输入被拒", !BinCore.hexToText("").ok);
+        check("null 被拒", !BinCore.hexToText(null).ok);
+        check("纯分隔符被拒", !BinCore.hexToText("  :, ").ok);
+        check("解出控制字符时拒绝", !BinCore.hexToText("0001020304").ok);
+        eq("上限与二进制同一口径", BinCore.MAX_HEX_CHARS, BinCore.MAX_BITS / 4);
+        StringBuilder tooLong = new StringBuilder();
+        for (int i = 0; i < BinCore.MAX_HEX_CHARS + 2; i++) tooLong.append('4');
+        check("超长被拒", !BinCore.hexToText(tooLong.toString()).ok);
+
+        System.out.println("== 14b. HEX 判定 ==");
+        check("带空格的 HEX 认得", BinCore.looksLikeHex("48 65 6C 6C 6F"));
+        check("0x 前缀认得", BinCore.looksLikeHex("0x48656C6C6F"));
+        check("连写 HEX 认得", BinCore.looksLikeHex("48656C6C6F"));
+        check("年份不当 HEX", !BinCore.looksLikeHex("2024"));
+        check("英文单词不当 HEX", !BinCore.looksLikeHex("Hello"));
+        check("中文不当 HEX", !BinCore.looksLikeHex("\u4f60\u597d"));
+        check("位串不当 HEX", !BinCore.looksLikeHex("01001000 01101001"));
+        check("Base64 不当 HEX", !BinCore.looksLikeHex("SGVsbG8="));
+        check("解不成正文的 HEX 不认", !BinCore.looksLikeHex("deadbeef"));
+        check("autoDetect 认 HEX", BinCore.autoDetect("48 65 6C 6C 6F").equals("hex2text"));
+        check("autoDetect 不乱认年份", BinCore.autoDetect("2024").equals("text2bin"));
+        check("autoDetect 二进制仍优先", BinCore.autoDetect("01001000 01101001").equals("bin2text"));
+        check("autoDetect 摩斯仍最优先", BinCore.autoDetect(".... . .-.. .-.. ---").equals("morse2text"));
+
         System.out.println();
         System.out.println("结果：通过 " + pass + " 项，失败 " + fail + " 项");
         if (fail > 0) System.exit(1);

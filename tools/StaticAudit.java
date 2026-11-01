@@ -325,6 +325,22 @@ public class StaticAudit {
         check("收面板要停播放", floCode.contains("stopMorsePlay();"), "");
         check("服务销毁要停播放", floCode.contains("player.stop();"), "");
 
+        System.out.println("=== J4. 十六进制（第四种编码） ===");
+        check("有 HEX 解码", binCode.contains("public static DecodeResult hexToText"), "");
+        check("有 HEX 判定", binCode.contains("public static boolean looksLikeHex"), "");
+        check("HEX 上限与二进制同口径", binCode.contains("MAX_HEX_CHARS = MAX_BITS / 4"), "");
+        check("HEX 认 0x 前缀", binCode.contains("0x"), "");
+        check("autoDetect 认 HEX", binCode.contains("\"hex2text\""), "");
+        check("HEX 排在 Base64 之前判定",
+                binCode.indexOf("looksLikeHex(text)") > 0
+                        && binCode.indexOf("looksLikeHex(text)") < binCode.indexOf("looksLikeBase64(text)"),
+                "纯数字串两边都符合，HEX 判在前面才不会当乱码解");
+        check("界面有 HEX 正向分支", floCode.contains("DIR_TEXT2HEX.equals(dir)"), "");
+        check("界面有 HEX 反向分支", floCode.contains("DIR_HEX2TEXT.equals(dir)"), "");
+        check("编码按钮走四档循环", floCode.contains("return CODEC_HEX;"), "");
+        check("HEX 有独立短名", floCode.contains("return \"HEX\""), "");
+        check("自动识别能落到 HEX", floCode.contains("\"hex2text\".equals(auto)"), "");
+
         System.out.println("=== J. 检查更新 / 安装器 ===");
         // 26) 打开主界面顺手查一次，24 小时节流；失败静默（国内直连 api.github.com 常超时）
         check("主界面会调自动检查", mainCode.contains("maybeAutoCheckUpdate()"), "");

@@ -533,6 +533,147 @@ public final class BinCore {
                 true, data.length, 0);
     }
 
+    // ---------- 十六进制 ----------
+
+    /**
+     * HEX 单次最多处理多少字符：两个字符一个字节，所以上限是 {@link #MAX_BITS}/4。
+     * 20 位二进制 = 5 位十六进制，两边卡的是同一个「2500 字节」口径，
+     * 免得出现「自动识别认、手动解码说过长」这类自相矛盾。
+     */
+    public static final int MAX_HEX_CHARS = MAX_BITS / 4;
+
+    private static boolean isHexChar(char c) {
+        return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
+    }
+
+    /** HEX 里允许出现的分隔符：空白、冒号、逗号、下划线、短横线（和 PC 版一致）。 */
+    private static boolean isHexSep(char c) {
+        return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == ':'
+                || c == ',' || c == '_' || c == '-';
+    }
+
+    /**
+     * 去掉 0x 前缀和分隔符，返回纯十六进制串。含非法字符返回 null。
+     *
+     * <p>为什么允许 0x：从代码里复制常量时常常带着前缀，让人手动删掉太不友好。
+     */
+    private static String cleanHex(String input) {
+        if (input == null) return null;
+        StringBuilder sb = new StringBuilder(input.length());
+        for (int i = 0; i < input.length(); i++) {
+            char c = input.charAt(i);
+            if (c == '0' && i + 1 < input.length()
+                    && (input.charAt(i + 1) == 'x' || input.charAt(i + 1) == 'X')) {
+                i++;
+                continue;
+            }
+            if (isHexSep(c)) continue;
+            if (!isHexChar(c)) return null;
+            sb.append(c);
+        }
+        return sb.toString();
+    }
+
+    private static int hexDigit(char c) {
+        if (c >= '0' && c <= '9') return c - '0';
+        if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+        return c - 'A' + 10;
+    }
+
+    /** 十六进制字符 -> 字节。含非法字符或长度为奇数（缺一位）返回 null。 */
+    public static byte[] hexToBytes(String input) {
+        String body = cleanHex(input);
+        if (body == null || body.isEmpty() || (body.length() & 1) != 0) return null;
+        byte[] data = new byte[body.length() / 2];
+        for (int i = 0; i < data.length; i++) {
+            data[i] = (byte) ((hexDigit(body.charAt(i * 2)) << 4) | hexDigit(body.charAt(i * 2 + 1)));
+        }
+        return data;
+    }
+
+    /**
+     * 是否「像一段十六进制」。
+     *
+     * <p>难点在误判：`2024`、`dead`、`beef`、`face` 这些都是纯正的十六进制字符，
+     * 单看字符集一定会把年份和英文单词吃进去。所以照 PC 版的三条捷径收紧：
+     *
+     * <ol>
+     *   <li>必须能解成合法 UTF-8 正文 —— 这条最先，因为它同时否掉 `2024-01-01`
+     *       这类「有分隔符但解出来是控制字符」的串；</li>
+     *   <li>带 `0x` 前缀或带分隔符（空格、冒号等）基本可确定是人工写的十六进制；</li>
+     *   <li>两者都没有时从严：短于 16 个字符还必须含 a-f 字母，纯数字不认。</li>
+     * </ol>
+     */
+    public static boolean looksLikeHex(String text) {
+        if (text == null) return false;
+        String raw = text.trim();
+        if (raw.isEmpty()) return false;
+        if (raw.length() > MAX_HEX_CHARS * 2) return false;
+        boolean hasPrefix = raw.indexOf("0x") >= 0 || raw.indexOf("0X") >= 0;
+        boolean hasSep = false;
+        boolean hasLetter = false;
+        for (int i = 0; i < raw.length(); i++) {
+            char c = raw.charAt(i);
+            if (isHexSep(c)) { hasSep = true; continue; }
+            if (isHexChar(c)) {
+                if ((c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) hasLetter = true;
+                continue;
+            }
+            if (c == 'x' || c == 'X') continue;   // 0x 前缀里的那个 x
+            return false;
+        }
+        String body = cleanHex(raw);
+        if (body == null || body.length() < 4) return false;
+        if ((body.length() & 1) != 0) return false;
+        if (body.length() > MAX_HEX_CHARS) return false;
+        byte[] data = hexToBytes(body);
+        if (data == null || data.length == 0) return false;
+        // 和 hexToText 同一口径：必须解成正常正文，否则「自动识别说这是 HEX、
+        // 手动切过去却报一串控制字符」，用户会以为是 bug。
+        String t = strictDecode(data, UTF8);
+        if (t == null || t.isEmpty()) return false;
+        if (countControls(t) > t.length() * MAX_CONTROL_RATIO) return false;
+        if (scoreText(t) <= 0) return false;
+        if (hasPrefix || hasSep) return true;
+        if (body.length() < 16 && !hasLetter) return false;
+        return true;
+    }
+
+    /** HEX 文本 -> 文字。 */
+    public static DecodeResult hexToText(String input) {
+        if (input == null || input.trim().isEmpty()) {
+            return new DecodeResult(null, "内容是空的", false, 0, 0);
+        }
+        String body = cleanHex(input);
+        if (body == null) {
+            return new DecodeResult(null, "含有十六进制以外的字符（只认 0-9 A-F 和空格、冒号等分隔）",
+                    false, 0, 0);
+        }
+        if (body.isEmpty()) {
+            return new DecodeResult(null, "没有可识别的十六进制字符", false, 0, 0);
+        }
+        if (body.length() > MAX_HEX_CHARS) {
+            return new DecodeResult(null, "内容过长（" + body.length() + " 个十六进制字符），最多支持 "
+                    + MAX_HEX_CHARS + " 个", false, 0, body.length() * 4);
+        }
+        if ((body.length() & 1) != 0) {
+            return new DecodeResult(null, "十六进制字符数是奇数（" + body.length()
+                    + " 个），两个字符才是一个字节，可能少了一位", false, 0, body.length() * 4);
+        }
+        byte[] data = hexToBytes(body);
+        if (data == null || data.length == 0) {
+            return new DecodeResult(null, "不是合法的十六进制", false, 0, 0);
+        }
+        String text = bytesToText(data);
+        int ctrl = countControls(text);
+        if (!text.isEmpty() && ctrl > text.length() * MAX_CONTROL_RATIO) {
+            return new DecodeResult(null, "解出 " + ctrl + " 个不可打印字符（共 "
+                    + text.length() + " 个），这段可能不是十六进制。十六进制："
+                    + previewHex(data, 24), false, data.length, 0);
+        }
+        return new DecodeResult(text, "已解码 " + data.length + " 字节（HEX）", true, data.length, 0);
+    }
+
 
     // ---------- 摩斯码 ----------
 
@@ -967,6 +1108,9 @@ public final class BinCore {
         // 但 '-' 和 '/' 恰好在 Base64 的字母表里，放后面会被 Base64 先吃掉一部分。
         if (looksLikeMorse(text)) return "morse2text";
         if (looksLikeBinary(text)) return "bin2text";
+        // 十六进制排在 Base64 前面：纯数字串（"12345678901234567890"）两边都符合，
+        // 当 HEX 解出来至少是有意义的字节，当 Base64 解出来更可能是乱码。
+        if (looksLikeHex(text)) return "hex2text";
         if (looksLikeBase64(text)) return "b64text";
         if (text != null && !text.trim().isEmpty()) return "text2bin";
         return "unknown";

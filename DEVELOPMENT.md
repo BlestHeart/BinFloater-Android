@@ -60,12 +60,12 @@ d8 --min-api 34 --output build/dex build/classes/**/*.class
 bash run_tests.sh
 ```
 
-两组共累计 394 项：
+两组共累计 441 项：
 
 | 组 | 项数 | 测什么 |
 |---|---|---|
-| 编解码核心 | 211 | `BinCore` 的双向转换、分隔符、编码回退、阈值判定、长度上限、hex 不截断、Base64 编解码与判定、摩斯码与中文电码、播放节奏；`Ccc` 的双向查表；`VersionUtil` 的版本号比较与 version.json 解析 |
-| 静态审查 | 183 | 读源码做约束检查（见下） |
+| 编解码核心 | 247 | `BinCore` 的双向转换、分隔符、编码回退、阈值判定、长度上限、hex 不截断、Base64 编解码与判定、摩斯码与中文电码、播放节奏；`Ccc` 的双向查表；`VersionUtil` 的版本号比较与 version.json 解析 |
+| 静态审查 | 194 | 读源码做约束检查（见下） |
 
 ### 为什么有「静态审查」这一组
 
@@ -434,7 +434,7 @@ app/
   res/values/styles.xml        主题
   res/mipmap-*/ic_launcher.png 图标
   src/com/binf/floater/
-    BinCore.java               编解码核心（含 Base64 / 摩斯码 / 播放节奏）
+    BinCore.java               编解码核心（含 Base64 / HEX / 摩斯码 / 播放节奏）
     Ccc.java                   中文电码表（7078 字，汉字↔4 位码，二分查表）
     MorsePlayer.java           摩斯播放：AudioTrack 合成音调 + 震动节拍
     FloatingService.java       悬浮球 + 面板 + 历史 + 拖动
@@ -444,8 +444,8 @@ app/
     UpdateChecker.java         读 version.json（走镜像）+ 下载 APK
     ApkProvider.java           极简 ContentProvider，把 APK 交给安装器
 tools/
-  CoreTest.java                211 项编解码 + 电码表 + 播放节奏 + 版本号 + version.json 解析测试
-  StaticAudit.java             183 项源码约束检查
+  CoreTest.java                247 项编解码 + 电码表 + 播放节奏 + 版本号 + version.json 解析测试
+  StaticAudit.java             194 项源码约束检查
   push_github.sh               推送脚本
 signing/
   README.md                    密钥说明（密钥本身不进 git）
@@ -537,7 +537,7 @@ v2.0 的改动：
 | APK 大小 | 8.1 MB | 29 KB |
 | `classes.dex` | 105 KB | 29 KB |
 | 源文件 | 9 个 | 3 个 |
-| 测试断言 | 467 项 | 80 项（当前 394） |
+| 测试断言 | 467 项 | 80 项（当前 441） |
 | 权限 | 6 个（含 INTERNET） | 4 个 |
 
 输入法代码全部在 git 历史里（v1.2 的 tag/commit），需要的话能翻出来。
