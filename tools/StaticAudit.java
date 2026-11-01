@@ -122,7 +122,7 @@ public class StaticAudit {
         // 方向现在是「自动 / 文→码 / 码→文」三态按钮，编码格式单独一个 BIN/B64
         // 按钮，两个布尔 + 派生出来的 dir。老的四向轮转已经拆掉了。
         check("有方向三态切换", flo.contains("autoDir = true;") && flo.contains("decodeDir = true;"), "");
-        check("有编码格式切换", flo.contains("codecB64 = !codecB64;"), "");
+        check("有编码格式切换", flo.contains("codec = nextCodec(codec);"), "");
         check("自动识别方向", flo.contains("BinCore.autoDetect"), "");
         check("自动识别在 refresh 里（手打也生效）",
                 methodBody(floCode, "private void refresh()").contains("applyAutoDir(in)"),
@@ -275,13 +275,29 @@ public class StaticAudit {
                 "toggleCodec 退出自动识别后没同步 dir，点了不生效");
         check("cycleDir 退出自动后同步 dir",
                 methodBody(floCode, "private void cycleDir()").contains("syncDirFromFlags()"), "");
-        // 25) 按钮文字要读「实际生效的格式」，不能只看 codecB64。
-        check("编码按钮读 shownCodecB64",
-                methodBody(floCode, "private void updateDir()").contains("shownCodecB64()"),
-                "编码按钮只看 codecB64，自动识别时会显示与实际解码格式不符");
+        // 25) 按钮文字要读「实际生效的格式」，不能只看 codec。
+        check("编码按钮读 shownCodec",
+                methodBody(floCode, "private void updateDir()").contains("codecLabel()"),
+                "编码按钮只看 codec，自动识别时会显示与实际解码格式不符");
         check("自动识别不覆盖正向编码目标",
-                methodBody(floCode, "private void applyAutoDir(String in)")
-                        .contains("dir = codecB64 ? DIR_TEXT2B64 : DIR_TEXT2BIN;"), "");
+                methodBody(floCode, "private void applyAutoDir(String in)").contains("forwardDir()"),
+                "自动识别把用户手选的编码格式也改掉了");
+
+        System.out.println("=== J2. 摩斯码 ===");
+        // 52) 摩斯码：三个纯函数 + 自动识别 + 界面四处口径一致
+        check("有文字→摩斯", binCode.contains("public static String textToMorse"), "");
+        check("有摩斯→文字", binCode.contains("public static MorseResult morseDecode"), "");
+        check("有摩斯判定", binCode.contains("public static boolean looksLikeMorse"), "");
+        check("autoDetect 认摩斯", binCode.contains("\"morse2text\""), "");
+        check("码表与字符表按下标配对",
+                binCode.contains("MORSE_DECODE.put(MORSE_CODES[i],")
+                        && binCode.contains("MORSE_CHARS.charAt(i)"),
+                "码表和字符表顺序错开就等于把字母和码配错");
+        check("摩斯有字符上限", binCode.contains("public static final int MORSE_MAX_CHARS"), "");
+        check("界面有摩斯正向分支", floCode.contains("DIR_TEXT2MORSE.equals(dir)"), "");
+        check("界面有摩斯反向分支", floCode.contains("DIR_MORSE2TEXT.equals(dir)"), "");
+        check("编码按钮走三档循环", floCode.contains("return CODEC_MORSE;"), "");
+        check("摩斯码地址落盘", floCode.contains("putString(\"codec\", codec)"), "");
 
         System.out.println("=== J. 检查更新 / 安装器 ===");
         // 26) 打开主界面顺手查一次，24 小时节流；失败静默（国内直连 api.github.com 常超时）

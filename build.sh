@@ -16,8 +16,8 @@ APK_NAME="BinFloater.apk"
 PKG="com.binf.floater"
 MIN_SDK=34
 TARGET_SDK=36
-VERSION_CODE=6
-VERSION_NAME="2.6"
+VERSION_CODE=7
+VERSION_NAME="2.7"
 
 echo "==> 清理"
 rm -rf "$OUT/gen" "$OUT/classes" "$OUT/dex" "$OUT/flat" "$OUT/base.apk" "$OUT/$APK_NAME"

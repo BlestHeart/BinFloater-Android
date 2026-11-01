@@ -99,6 +99,14 @@ public class FloatingService extends Service {
     private static final String DIR_BIN2TEXT = "bin2text";
     private static final String DIR_TEXT2B64 = "text2b64";
     private static final String DIR_B64TEXT = "b64text";
+    private static final String DIR_TEXT2MORSE = "text2morse";
+    private static final String DIR_MORSE2TEXT = "morse2text";
+
+    // ---------- 编码格式 ----------
+    /** 二进制 / Base64 / 摩斯码。既是正向的目标，也是反向的解析格式。 */
+    private static final String CODEC_BIN = "bin";
+    private static final String CODEC_B64 = "b64";
+    private static final String CODEC_MORSE = "morse";
 
     // ---------- 历史 ----------
     private static final int MAX_HISTORY = 20;
@@ -152,8 +160,8 @@ public class FloatingService extends Service {
     private boolean autoDir = true;
     /** false = 文字→编码，true = 编码→文字。autoDir 时是「上一次判定的结果」。 */
     private boolean decodeDir = false;
-    /** false = 二进制，true = Base64。既是编码目标，也是解码格式。 */
-    private boolean codecB64 = false;
+    /** 编码格式：`CODEC_BIN` / `CODEC_B64` / `CODEC_MORSE`。既是编码目标，也是解码格式。 */
+    private String codec = CODEC_BIN;
     /** 由上面三个布尔派生出来的方向字符串，refresh/历史/文案都用它。 */
     private String dir = DIR_TEXT2BIN;
     /** group8 / group4 / compact / hex。 */
@@ -219,6 +227,7 @@ public class FloatingService extends Service {
         pal = Palette.get(this);
         SharedPreferences p = prefs();
         renderMode = p.getString("render_mode", "group8");
+        codec = normalizeCodec(p.getString("codec", CODEC_BIN));
         bubbleScale = clamp(p.getInt("bubble_scale", 1), 0, BUBBLE_SCALES.length - 1);
         bubbleAlpha = clamp(p.getInt("bubble_alpha", 1), 0, BUBBLE_ALPHAS.length - 1);
         panelPinned = p.getBoolean("panel_pinned", false);
@@ -811,7 +820,7 @@ public class FloatingService extends Service {
             cycleDir();
             hideMenu();
         }));
-        m.addView(menuBtn("▤  编码：" + (shownCodecB64() ? "Base64" : "二进制"), v -> {
+        m.addView(menuBtn("▤  编码：" + codecName(), v -> {
             toggleCodec();
             hideMenu();
         }));
@@ -1125,9 +1134,9 @@ public class FloatingService extends Service {
         dlp.leftMargin = dp(6);
         head.addView(dirBtn, dlp);
 
-        // 编码格式：二进制 / Base64。自动识别模式下它只改「编码目标」。
+        // 编码格式：二进制 → Base64 → 摩斯码。自动识别模式下它只改「编码目标」。
         codecBtn = smallBtn("BIN");
-        codecBtn.setContentDescription("切换二进制与 Base64");
+        codecBtn.setContentDescription("切换二进制 / Base64 / 摩斯码");
         codecBtn.setOnClickListener(v -> toggleCodec());
         LinearLayout.LayoutParams blp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
@@ -1358,7 +1367,7 @@ public class FloatingService extends Service {
         if (autoDir) {
             // 从自动切出来时，先接住「当前屏幕上生效的编码格式」，再翻成正向。
             // 不接的话，自动识别解的是 Base64、按钮写着 B64，一点却跳成 BIN。
-            codecB64 = shownCodecB64();
+            codec = shownCodec();
             autoDir = false;
             decodeDir = false;
         } else if (!decodeDir) {
@@ -1372,7 +1381,7 @@ public class FloatingService extends Service {
     }
 
     /**
-     * 编码循环：二进制 ↔ Base64。
+     * 编码循环：二进制 → Base64 → 摩斯码 → 二进制。
      *
      * 分两种情况，因为「按钮按下去必须立刻看到变化」，否则就是死键：
      * - 自动识别判定成解码时，点它等于「不对，是另一种格式」，退出自动、按相反格式重解；
@@ -1380,58 +1389,100 @@ public class FloatingService extends Service {
      */
     private void toggleCodec() {
         if (autoDir && decodeDir) {
-            boolean curIsB64 = DIR_B64TEXT.equals(dir);
+            String cur = shownCodec();
             autoDir = false;
             decodeDir = true;
-            codecB64 = !curIsB64;
+            codec = nextCodec(cur);
             // 退出自动之后 dir 就没人重算了，必须自己同步一次。
             // 漏掉这行会出现「按钮点了、格式没换」—— 因为 refresh 读的仍是旧 dir。
             syncDirFromFlags();
         } else {
-            codecB64 = !codecB64;
+            codec = nextCodec(codec);
             if (!autoDir) syncDirFromFlags();
         }
+        saveCodec();
         updateDir();
         flushRefresh();
     }
 
-    /**
-     * 按钮上该显示哪种编码。
-     *
-     * 不能只看 codecB64：自动识别判定成解码时，实际生效的是 dir 里的格式，
-     * 此时若还按 codecB64 显示，就会出现「界面写着 BIN、解的是 Base64」。
-     */
-    private boolean shownCodecB64() {
-        return DIR_TEXT2B64.equals(dir) || DIR_B64TEXT.equals(dir);
+    /** 编码格式的三档循环。 */
+    private static String nextCodec(String c) {
+        if (CODEC_BIN.equals(c)) return CODEC_B64;
+        if (CODEC_B64.equals(c)) return CODEC_MORSE;
+        return CODEC_BIN;
     }
 
-    /** 把三个布尔合成 dir。autoDir 时不动 dir —— 它由 applyAutoDir 决定。 */
+    /** prefs 里读出来的值可能是旧版本/被外部改过的，收口到三档之内。 */
+    private static String normalizeCodec(String c) {
+        if (CODEC_B64.equals(c) || CODEC_MORSE.equals(c)) return c;
+        return CODEC_BIN;
+    }
+
+    private void saveCodec() {
+        try { prefs().edit().putString("codec", codec).apply(); } catch (Exception ignored) {}
+    }
+
+    /**
+     * 当前 dir 实际生效的编码格式。
+     *
+     * 不能只看 codec：自动识别判定成解码时，实际生效的是 dir 里的格式，
+     * 此时若还按 codec 显示，就会出现「界面写着 BIN、解的是 Base64」。
+     */
+    private String shownCodec() {
+        if (DIR_TEXT2B64.equals(dir) || DIR_B64TEXT.equals(dir)) return CODEC_B64;
+        if (DIR_TEXT2MORSE.equals(dir) || DIR_MORSE2TEXT.equals(dir)) return CODEC_MORSE;
+        return CODEC_BIN;
+    }
+
+    /** 编码格式的中文名（长按菜单用）。 */
+    private String codecName() {
+        String c = shownCodec();
+        if (CODEC_B64.equals(c)) return "Base64";
+        if (CODEC_MORSE.equals(c)) return "摩斯码";
+        return "二进制";
+    }
+
+    /** 编码格式的短名（标题栏按钮用，面板只有 292dp 宽）。 */
+    private String codecLabel() {
+        String c = shownCodec();
+        if (CODEC_B64.equals(c)) return "B64";
+        if (CODEC_MORSE.equals(c)) return "摩斯";
+        return "BIN";
+    }
+
+    /** 正向（文字 → 编码）时 dir 该是什么。 */
+    private String forwardDir() {
+        if (CODEC_MORSE.equals(codec)) return DIR_TEXT2MORSE;
+        return CODEC_B64.equals(codec) ? DIR_TEXT2B64 : DIR_TEXT2BIN;
+    }
+
+    /** 把状态合成 dir。autoDir 时不动 dir —— 它由 applyAutoDir 决定。 */
     private void syncDirFromFlags() {
         if (autoDir) return;
-        if (decodeDir) dir = codecB64 ? DIR_B64TEXT : DIR_BIN2TEXT;
-        else           dir = codecB64 ? DIR_TEXT2B64 : DIR_TEXT2BIN;
+        if (decodeDir) {
+            dir = CODEC_MORSE.equals(codec) ? DIR_MORSE2TEXT
+                    : (CODEC_B64.equals(codec) ? DIR_B64TEXT : DIR_BIN2TEXT);
+        } else {
+            dir = forwardDir();
+        }
     }
 
-    /** 从 dir 反推三个布尔（历史条目点了、自动识别解出方向之后用）。 */
+    /** 从 dir 反推状态（历史条目点了、自动识别解出方向之后用）。 */
     private void syncFlagsFromDir() {
-        decodeDir = DIR_BIN2TEXT.equals(dir) || DIR_B64TEXT.equals(dir);
-        if (!autoDir) codecB64 = DIR_TEXT2B64.equals(dir) || DIR_B64TEXT.equals(dir);
+        decodeDir = DIR_BIN2TEXT.equals(dir) || DIR_B64TEXT.equals(dir)
+                || DIR_MORSE2TEXT.equals(dir);
+        if (!autoDir) codec = shownCodec();
     }
 
     /**
      * 自动识别：只决定「正向还是反向」，以及反向时按哪种格式解码；
-     * 正向的目标（二进制 / Base64）始终由 codecB64 决定 —— 用户手动选的
+     * 正向的目标（二进制 / Base64 / 摩斯码）始终由 codec 决定 —— 用户手动选的
      * 编码格式不该因为输入了一段 0/1 就被悄悄改掉。
      */
     private void applyAutoDir(String in) {
-        if (in == null || in.isEmpty()) {
+        if (in == null || in.isEmpty() || in.length() > MAX_AUTODETECT_CHARS) {
             decodeDir = false;
-            dir = codecB64 ? DIR_TEXT2B64 : DIR_TEXT2BIN;
-            return;
-        }
-        if (in.length() > MAX_AUTODETECT_CHARS) {
-            decodeDir = false;
-            dir = codecB64 ? DIR_TEXT2B64 : DIR_TEXT2BIN;
+            dir = forwardDir();
             return;
         }
         String auto = BinCore.autoDetect(in);
@@ -1441,29 +1492,36 @@ public class FloatingService extends Service {
         } else if ("b64text".equals(auto)) {
             decodeDir = true;
             dir = DIR_B64TEXT;
+        } else if ("morse2text".equals(auto)) {
+            decodeDir = true;
+            dir = DIR_MORSE2TEXT;
         } else {
             decodeDir = false;
-            dir = codecB64 ? DIR_TEXT2B64 : DIR_TEXT2BIN;
+            dir = forwardDir();
         }
     }
 
     private String dirLabelText() {
         String base;
         switch (dir) {
-            case DIR_BIN2TEXT: base = "二进制 → 文字"; break;
-            case DIR_TEXT2B64: base = "文字 → Base64"; break;
-            case DIR_B64TEXT:  base = "Base64 → 文字"; break;
-            default:           base = "文字 → 二进制"; break;
+            case DIR_BIN2TEXT:   base = "二进制 → 文字"; break;
+            case DIR_TEXT2B64:   base = "文字 → Base64"; break;
+            case DIR_B64TEXT:    base = "Base64 → 文字"; break;
+            case DIR_TEXT2MORSE: base = "文字 → 摩斯码"; break;
+            case DIR_MORSE2TEXT: base = "摩斯码 → 文字"; break;
+            default:             base = "文字 → 二进制"; break;
         }
         return autoDir ? "自动识别：" + base : base;
     }
 
     private String dirShortLabel(String d) {
         switch (d) {
-            case DIR_BIN2TEXT: return "2T";
-            case DIR_TEXT2B64: return "B64";
-            case DIR_B64TEXT: return "T64";
-            default:           return "2B";
+            case DIR_BIN2TEXT:   return "2T";
+            case DIR_TEXT2B64:   return "B64";
+            case DIR_B64TEXT:    return "T64";
+            case DIR_TEXT2MORSE: return "→摩";
+            case DIR_MORSE2TEXT: return "摩→";
+            default:             return "2B";
         }
     }
 
@@ -1480,9 +1538,8 @@ public class FloatingService extends Service {
             dirBtn.setContentDescription(autoDir ? "方向：自动识别" : dirLabelText());
         }
         if (codecBtn != null) {
-            boolean b64 = shownCodecB64();
-            codecBtn.setText(b64 ? "B64" : "BIN");
-            codecBtn.setContentDescription(b64 ? "编码：Base64" : "编码：二进制");
+            codecBtn.setText(codecLabel());
+            codecBtn.setContentDescription("编码格式：" + codecName());
         }
         if (modeBtn != null) {
             modeBtn.setText(modeLabel());
@@ -1555,6 +1612,40 @@ public class FloatingService extends Service {
             fullOutput = b64;
             setOutput(b64, pal.accent);
             status.setText(BinCore.describe(in) + " · Base64");
+        } else if (DIR_TEXT2MORSE.equals(dir)) {
+            // 摩斯码是「一个字符 → 最多 6 个符号」，2000 字符就能胀到一万多，
+            // 和二进制那条一样，超长必须先拦住，别在主线程上拼字符串。
+            if (in.length() > BinCore.MORSE_MAX_CHARS) {
+                fullOutput = "";
+                output.setTextColor(pal.err);
+                output.setText("内容太长：" + BinCore.describe(in) + "，转成摩斯码最多支持 "
+                        + BinCore.MORSE_MAX_CHARS + " 字符。请分段转换。");
+                status.setText("");
+                return;
+            }
+            BinCore.MorseResult r = BinCore.morseEncode(in);
+            if (r.ok) {
+                fullOutput = r.text;
+                setOutput(r.text, pal.teal);
+                status.setText(r.message);
+            } else {
+                fullOutput = "";
+                output.setText("无法编码：" + r.message);
+                output.setTextColor(pal.err);
+                status.setText("");
+            }
+        } else if (DIR_MORSE2TEXT.equals(dir)) {
+            BinCore.MorseResult r = BinCore.morseDecode(in);
+            if (r.ok) {
+                fullOutput = r.text;
+                setOutput(r.text, pal.text);
+                status.setText(r.message);
+            } else {
+                fullOutput = "";
+                output.setText("无法解码：" + r.message);
+                output.setTextColor(pal.err);
+                status.setText("");
+            }
         } else if (DIR_B64TEXT.equals(dir)) {
             BinCore.DecodeResult r = BinCore.base64ToText(in);
             if (r.ok) {
@@ -1584,10 +1675,12 @@ public class FloatingService extends Service {
 
     private String emptyHint() {
         switch (dir) {
-            case DIR_BIN2TEXT: return "粘贴 0/1 串，下方出译文";
-            case DIR_TEXT2B64: return "输入文字，下方出 Base64";
-            case DIR_B64TEXT: return "粘贴 Base64，下方出译文";
-            default:           return "输入文字，下方出二进制";
+            case DIR_BIN2TEXT:   return "粘贴 0/1 串，下方出译文";
+            case DIR_TEXT2B64:   return "输入文字，下方出 Base64";
+            case DIR_B64TEXT:    return "粘贴 Base64，下方出译文";
+            case DIR_TEXT2MORSE: return "输入文字（A-Z 0-9 标点），下方出摩斯码";
+            case DIR_MORSE2TEXT: return "粘贴 . - 串，字母空格、词用 /，下方出译文";
+            default:             return "输入文字，下方出二进制";
         }
     }
 

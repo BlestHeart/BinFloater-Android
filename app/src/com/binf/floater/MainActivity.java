@@ -194,7 +194,7 @@ public class MainActivity extends Activity {
         root.addView(title);
 
         TextView sub = new TextView(this);
-        sub.setText("桌面上一个小球，点开就能把文字转成二进制 / HEX / Base64，或者反过来解回文字");
+        sub.setText("桌面上一个小球，点开就能把文字转成二进制 / HEX / Base64 / 摩斯码，或者反过来解回文字");
         sub.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
         sub.setTextColor(pal.muted);
         LinearLayout.LayoutParams subLp = new LinearLayout.LayoutParams(
@@ -243,11 +243,11 @@ public class MainActivity extends Activity {
         addSectionTitle("怎么用");
         LinearLayout howCard = makeCard();
         TextView how = new TextView(this);
-        how.setText("1. 在任意 App 里复制一段文字、一串 0/1 或一段 Base64\n"
+        how.setText("1. 在任意 App 里复制一段文字、一串 0/1、一段 Base64 或一串 . - 摩斯码\n"
                 + "2. 点桌面上的「01」小球，面板会自动读剪切板并转换\n"
                 + "3. 点「复制」把结果放回剪切板，粘到别处去\n\n"
                 + "面板上还有输入框，不想走剪切板就直接在里面打字。\n"
-                + "「自动/文→码/码→文」管方向，「BIN/B64」管二进制还是 Base64，\n"
+                + "「自动/文→码/码→文」管方向，「BIN/B64/摩斯」管用哪种编码，\n"
                 + "「8位/4位/连写/HEX/B64」切换显示格式。\n"
                 + "「✕」收起面板（悬浮球还在），长按「✕」才彻底关闭悬浮窗。\n"
                 + "长按悬浮球弹出快捷菜单：切方向、读剪切板、调球大小和不透明度。\n"
@@ -269,7 +269,10 @@ public class MainActivity extends Activity {
                 + "二进制判定：去掉分隔符后至少 16 位；不超过 24 位时还必须同时含 0 和 1\n"
                 + "Base64：标准/URL 安全字母表都认，缺 padding 会自动补齐；"
                 + "解出的字节必须是合法 UTF-8 才当作 Base64\n"
-                + "长度上限：二进制单次 20000 位（约 2500 字节）");
+                + "摩斯码：只支持 A-Z、0-9 和常用标点（摩斯码表示不了中文），"
+                + "字母之间一个空格、词之间用 /；解出来一律大写\n"
+                + "长度上限：二进制单次 20000 位（约 2500 字节）、摩斯码单次 "
+                + BinCore.MORSE_MAX_CHARS + " 字符");
         about.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
         about.setTextColor(pal.muted);
         about.setLineSpacing(dp(3), 1f);

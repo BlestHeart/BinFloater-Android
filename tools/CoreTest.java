@@ -231,6 +231,62 @@ public class CoreTest {
         check("解析出来的版本能比大小",
                 VersionUtil.isNewer(VersionUtil.jsonString(manifest, "versionName"), "2.5"));
 
+        System.out.println("== 13. 摩斯码 ==");
+        // 编码：字母空格、词用 " / "，一律大写（摩斯本身没有大小写）。
+        eq("HELLO", BinCore.textToMorse("HELLO"), ".... . .-.. .-.. ---");
+        eq("小写也认", BinCore.textToMorse("hello"), ".... . .-.. .-.. ---");
+        eq("SOS", BinCore.textToMorse("SOS"), "... --- ...");
+        eq("词间用斜杠", BinCore.textToMorse("HI ME"), ".... .. / -- .");
+        eq("多空格只算一个词分隔", BinCore.textToMorse("HI   ME"), ".... .. / -- .");
+        eq("首尾空格被忽略", BinCore.textToMorse("  HI  "), ".... ..");
+        eq("数字", BinCore.textToMorse("123"), ".---- ..--- ...--");
+        eq("标点", BinCore.textToMorse("?"), "..--..");
+        eq("斜杠字符本身有码", BinCore.textToMorse("/"), "-..-.");
+        eq("空串", BinCore.textToMorse(""), "");
+        eq("null 安全", BinCore.textToMorse(null), "");
+        eq("中文跳过", BinCore.textToMorse("中文"), "");
+        eq("中英混排只留英文", BinCore.textToMorse("中A文B"), ".- -...");
+
+        System.out.println("== 13b. 摩斯码解码 ==");
+        eq("解回 HELLO", BinCore.morseDecode(".... . .-.. .-.. ---").text, "HELLO");
+        eq("词间隔还原成空格", BinCore.morseDecode(".... .. / -- .").text, "HI ME");
+        eq("竖线也当词分隔", BinCore.morseDecode(".- | -...").text, "A B");
+        eq("多空格容错", BinCore.morseDecode("....   .").text, "HE");
+        eq("首尾空格容错", BinCore.morseDecode("  .-  ").text, "A");
+        eq("数字解码", BinCore.morseDecode(".---- ..--- ...--").text, "123");
+        check("空输入被拒", !BinCore.morseDecode("").ok);
+        check("null 被拒", !BinCore.morseDecode(null).ok);
+        check("纯分隔符被拒", !BinCore.morseDecode(" /  / ").ok);
+        check("非法字符被拒", !BinCore.morseDecode(".- x").ok);
+        check("不存在的码被拒", !BinCore.morseDecode("........").ok);
+
+        System.out.println("== 13c. 摩斯码往返 ==");
+        String[] morseSamples = {"SOS", "HELLO WORLD", "A1 B2", "TEST 123"};
+        for (String s : morseSamples) {
+            eq("往返 [" + s + "]", BinCore.morseDecode(BinCore.textToMorse(s)).text, s);
+        }
+
+        System.out.println("== 13d. 摩斯码判定 ==");
+        check("标准串判为摩斯", BinCore.looksLikeMorse(".... . .-.. .-.. ---"));
+        check("短串不误判", !BinCore.looksLikeMorse("..."));
+        check("单个符号不误判", !BinCore.looksLikeMorse(".-"));
+        check("普通文字不误判", !BinCore.looksLikeMorse("Hello"));
+        check("中文不误判", !BinCore.looksLikeMorse("你好"));
+        check("位串不误判", !BinCore.looksLikeMorse("01001000 01101001"));
+        check("连写超长不误判", !BinCore.looksLikeMorse(".........-"));
+        check("autoDetect 认摩斯", BinCore.autoDetect(".... . .-.. .-.. ---").equals("morse2text"));
+        check("autoDetect 不乱认普通文字", BinCore.autoDetect("Hello World").equals("text2bin"));
+        check("autoDetect 二进制优先于摩斯", BinCore.autoDetect("01001000 01101001").equals("bin2text"));
+
+        System.out.println("== 13e. 编码结果与统计 ==");
+        BinCore.MorseResult enc = BinCore.morseEncode("Hi 中文");
+        eq("混排只编码能表示的", enc.text, ".... ..");
+        eq("跳过的字数", enc.skipped, 2);
+        eq("成功标记", enc.ok ? 1 : 0, 1);
+        check("说明里点出跳过", enc.message.contains("跳过 2"));
+        check("中文全跳过时报错", !BinCore.morseEncode("全部中文").ok);
+        check("超长输入被拒", !BinCore.morseEncode(new String(new char[BinCore.MORSE_MAX_CHARS + 1]).replace('\0', 'a')).ok);
+
         System.out.println();
         System.out.println("结果：通过 " + pass + " 项，失败 " + fail + " 项");
         if (fail > 0) System.exit(1);

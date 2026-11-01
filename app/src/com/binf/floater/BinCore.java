@@ -533,8 +533,233 @@ public final class BinCore {
                 true, data.length, 0);
     }
 
+
+    // ---------- 摩斯码 ----------
+
+    /**
+     * 字符表与码表一一对应：`MORSE_CHARS[i]` 的码就是 `MORSE_CODES[i]`。
+     * 只收国际摩斯（ITU-R M.1677-1）的 26 个字母、10 个数字和 18 个常用标点 ——
+     * 摩斯本身没有中文，汉字只能走二进制/Base64 那两条路。
+     */
+    private static final String MORSE_CHARS =
+            "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.,?!:;\"'-/@()&=+_$";
+    private static final String[] MORSE_CODES = {
+            ".-", "-...", "-.-.", "-..", ".", "..-.", "--.", "....", "..", ".---", "-.-", ".-..", "--",
+            "-.", "---", ".--.", "--.-", ".-.", "...", "-", "..-", "...-", ".--", "-..-", "-.--", "--..",
+            "-----", ".----", "..---", "...--", "....-", ".....", "-....", "--...", "---..", "----.",
+            ".-.-.-", "--..--", "..--..", "-.-.--", "---...", "-.-.-.", ".----.", ".-..-.", "-....-", "-..-.",
+            ".--.-.", "-.--.", "-.--.-", ".-...", "-...-", ".-.-.", "..--.-", "...-..-"
+    };
+
+    /** 摩斯码输入的字符上限。一个字符最多 6 个符号 + 空格，2000 字符约 1.4 万字符输出。 */
+    public static final int MORSE_MAX_CHARS = 2000;
+
+    /** 码 -> 字符 的查表，长度 128（码最长 6 个符号，全是 ASCII，用 String 做键最省事）。 */
+    private static final java.util.HashMap<String, Character> MORSE_DECODE =
+            new java.util.HashMap<String, Character>(128);
+
+    static {
+        for (int i = 0; i < MORSE_CHARS.length(); i++) {
+            MORSE_DECODE.put(MORSE_CODES[i], Character.valueOf(MORSE_CHARS.charAt(i)));
+        }
+    }
+
+    /** 摩斯码结果。text 成功时是转换结果，失败时是 null。 */
+    public static final class MorseResult {
+        public final String text;      // 转换结果，失败为 null
+        public final String message;   // 给用户看的说明
+        public final boolean ok;
+        public final int symbols;      // 摩斯符号（.-）个数
+        public final int chars;        // 明文字符数
+        public final int skipped;      // 编码时跳过的、无法表示的字符数
+
+        MorseResult(String text, String message, boolean ok, int symbols, int chars, int skipped) {
+            this.text = text;
+            this.message = message;
+            this.ok = ok;
+            this.symbols = symbols;
+            this.chars = chars;
+            this.skipped = skipped;
+        }
+    }
+
+    /** 查字符对应的码，没有返回 null。字母按大写查（摩斯不区分大小写）。 */
+    private static String morseCodeOf(char c) {
+        char u = Character.toUpperCase(c);
+        int i = MORSE_CHARS.indexOf(u);
+        return i < 0 ? null : MORSE_CODES[i];
+    }
+
+    /**
+     * 文字 -> 摩斯码。字母之间一个空格，单词之间 {@code " / "}。
+     *
+     * 无法表示的字符（汉字、emoji、空格外的大部分符号）直接跳过 —— 与其塞一个
+     * 假的占位符让用户以为译对了，不如什么都不输出，由调用方报告跳过了几个。
+     */
+    public static String textToMorse(String text) {
+        if (text == null || text.isEmpty()) return "";
+        StringBuilder sb = new StringBuilder(text.length() * 6);
+        boolean pendingSpace = false;   // 上一个字符是词分隔，等真的写出字母时再补 " / "
+        int wrote = 0;
+        for (int i = 0; i < text.length(); i++) {
+            char c = text.charAt(i);
+            if (isSpaceChar(c)) { pendingSpace = wrote > 0; continue; }
+            String code = morseCodeOf(c);
+            if (code == null) continue;   // 汉字/emoji 等，跳过
+            if (wrote > 0) sb.append(pendingSpace ? " / " : " ");
+            sb.append(code);
+            wrote++;
+            pendingSpace = false;
+        }
+        return sb.toString();
+    }
+
+    /** 文字 -> 摩斯码，带统计与说明。 */
+    public static MorseResult morseEncode(String input) {
+        if (input == null || input.trim().isEmpty()) {
+            return new MorseResult(null, "内容是空的", false, 0, 0, 0);
+        }
+        if (input.length() > MORSE_MAX_CHARS) {
+            return new MorseResult(null, "内容过长（" + input.length() + " 字符），最多支持 "
+                    + MORSE_MAX_CHARS + " 字符", false, 0, input.length(), 0);
+        }
+        String morse = textToMorse(input);
+        // 统计跳过了多少：可显示的字符里，有对应码表的才算「用上了」。
+        int used = 0;
+        for (int i = 0; i < input.length(); i++) {
+            char c = input.charAt(i);
+            if (!isSpaceChar(c) && morseCodeOf(c) != null) used++;
+        }
+        int skipped = 0;
+        for (int i = 0; i < input.length(); i++) {
+            char c = input.charAt(i);
+            if (!isSpaceChar(c) && morseCodeOf(c) == null) skipped++;
+        }
+        if (morse.isEmpty()) {
+            return new MorseResult(null, "没有可转成摩斯码的字符（只支持 A-Z、0-9 和常用标点，"
+                    + "摩斯码表示不了中文）", false, 0, used, skipped);
+        }
+        int symbols = 0;
+        for (int i = 0; i < morse.length(); i++) {
+            char c = morse.charAt(i);
+            if (c == '.' || c == '-') symbols++;
+        }
+        String msg = "已编码 " + used + " 字符 → " + symbols + " 个摩斯符号";
+        if (skipped > 0) msg += "，跳过 " + skipped + " 个无法表示的字符（摩斯码没有中文）";
+        return new MorseResult(morse, msg, true, symbols, used, skipped);
+    }
+
+    /** 摩斯码里允许出现的分隔符：空格、斜杠（词）、竖线（词）、制表换行。 */
+    private static boolean isMorseSeparator(char c) {
+        return isSpaceChar(c) || c == '/' || c == '|' || c == '\uFF0F' || c == '\u3000';
+    }
+
+    /**
+     * 摩斯码 -> 文字。分词用空格，词间用 {@code /}；多个分隔符连写当作一个。
+     *
+     * 输出统一大写：码表里 '.'/'..' 本来就不分大小写，明确一种写法比「猜原来的大小写」诚实。
+     */
+    public static MorseResult morseDecode(String input) {
+        if (input == null || input.trim().isEmpty()) {
+            return new MorseResult(null, "内容是空的", false, 0, 0, 0);
+        }
+        if (input.length() > MORSE_MAX_CHARS) {
+            return new MorseResult(null, "内容过长（" + input.length() + " 字符），最多支持 "
+                    + MORSE_MAX_CHARS + " 字符", false, 0, 0, 0);
+        }
+        StringBuilder out = new StringBuilder(input.length() / 3 + 1);
+        StringBuilder tok = new StringBuilder(8);
+        int symbols = 0;
+        int unknown = 0;
+        String firstUnknown = null;
+        int i = 0;
+        while (i < input.length()) {
+            char c = input.charAt(i);
+            if (isMorseSeparator(c)) {
+                // '/' 和 '|' 是词分隔，空格是字母分隔。连写的分隔符里只要有词分隔就补空格。
+                boolean word = (c == '/' || c == '|' || c == '\uFF0F');
+                if (tok.length() > 0) {
+                    Character dec = MORSE_DECODE.get(tok.toString());
+                    if (dec == null) {
+                        unknown++;
+                        if (firstUnknown == null) firstUnknown = tok.toString();
+                    } else {
+                        out.append(dec.charValue());
+                    }
+                    tok.setLength(0);
+                }
+                if (word && out.length() > 0
+                        && out.charAt(out.length() - 1) != ' ') out.append(' ');
+                i++;
+                continue;
+            }
+            if (c == '.' || c == '-') {
+                symbols++;
+                if (tok.length() < 8) tok.append(c);
+                i++;
+                continue;
+            }
+            return new MorseResult(null, "包含摩斯码里没有的字符：" + c
+                    + "（只认 . - 和空格 / ）", false, symbols, 0, 0);
+        }
+        if (tok.length() > 0) {
+            Character dec = MORSE_DECODE.get(tok.toString());
+            if (dec == null) {
+                unknown++;
+                if (firstUnknown == null) firstUnknown = tok.toString();
+            } else {
+                out.append(dec.charValue());
+            }
+        }
+        while (out.length() > 0 && out.charAt(out.length() - 1) == ' ') {
+            out.setLength(out.length() - 1);
+        }
+        if (unknown > 0) {
+            return new MorseResult(null, "有 " + unknown + " 组不是合法摩斯码（第一组是 \""
+                    + firstUnknown + "\"），检查一下 . 和 - 的顺序", false, symbols, 0, 0);
+        }
+        if (out.length() == 0) {
+            return new MorseResult(null, "没有可识别的摩斯码", false, symbols, 0, 0);
+        }
+        return new MorseResult(out.toString(), "已解码 " + symbols + " 个摩斯符号 → "
+                + out.length() + " 个字符", true, symbols, out.length(), 0);
+    }
+
+    /**
+     * 是否「像一段摩斯码」。刻意严格，避免把正文里的破折号、省略号误判：
+     * 只能由 . - 空格 / | 组成，至少 2 组、至少 4 个符号，而且**每一组都得能查到字符**。
+     */
+    public static boolean looksLikeMorse(String text) {
+        if (text == null) return false;
+        String t = text.trim();
+        if (t.isEmpty()) return false;
+        if (t.length() > MORSE_MAX_CHARS) return false;
+        int groups = 0;
+        int symbols = 0;
+        int runLen = 0;
+        for (int i = 0; i < t.length(); i++) {
+            char c = t.charAt(i);
+            if (c == '.' || c == '-') {
+                symbols++;
+                if (++runLen > 8) return false;   // 连写超过 8 个符号不可能是单个字符
+            } else if (isMorseSeparator(c)) {
+                if (runLen > 0) groups++;
+                runLen = 0;
+            } else {
+                return false;
+            }
+        }
+        if (runLen > 0) groups++;
+        if (groups < 2 || symbols < 4) return false;
+        MorseResult r = morseDecode(t);
+        return r.ok && r.chars > 0;
+    }
+
     /** 自动判定方向。 */
     public static String autoDetect(String text) {
+        // 摩斯码先判：它的字符集（. - / | 空格）和二进制/Base64 完全不重叠，
+        // 但 '-' 和 '/' 恰好在 Base64 的字母表里，放后面会被 Base64 先吃掉一部分。
+        if (looksLikeMorse(text)) return "morse2text";
         if (looksLikeBinary(text)) return "bin2text";
         if (looksLikeBase64(text)) return "b64text";
         if (text != null && !text.trim().isEmpty()) return "text2bin";

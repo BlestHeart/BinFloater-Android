@@ -32,11 +32,13 @@ run() {
   local pass fail
   # 各测试类的断言行有 "  PASS" / "  OK  " 两种写法，统一认
   pass=$(printf '%s\n' "$out" | grep -cE '(^|[[:space:]])(PASS|OK)[[:space:]]' || true)
-  fail=$(printf '%s\n' "$out" | grep -c 'FAIL' || true)
+  # CoreTest 用 "FAIL"，StaticAudit 用 "ERROR" —— 只认 FAIL 会把静态审查的
+  # 问题统计成「失败 0 项」，只能靠 expect_min 兜，等于漏报。
+  fail=$(printf '%s\n' "$out" | grep -cE 'FAIL|ERROR' || true)
   echo "  通过 $pass 项，失败 $fail 项"
   if [ "$rc" -ne 0 ] || [ "$fail" -ne 0 ]; then
     echo "  ✗ 失败（退出码 $rc）"
-    printf '%s\n' "$out" | grep -E 'FAIL|Exception|错误|原因' | head -8
+    printf '%s\n' "$out" | grep -E 'FAIL|ERROR|Exception|错误|原因' | head -8
     FAIL=$((FAIL+1))
   elif [ "$pass" -lt "$expect_min" ]; then
     echo "  ✗ 只跑了 $pass 项，少于预期的 $expect_min 项"
@@ -66,13 +68,13 @@ rm -rf build/r_core && mkdir -p build/r_core
 "$JAVAC" -encoding UTF-8 -d build/r_core \
   app/src/com/binf/floater/BinCore.java app/src/com/binf/floater/VersionUtil.java \
   tools/CoreTest.java 2>&1 | head -3
-run "编解码核心" 112 "$JAVA" -Dfile.encoding=UTF-8 -cp build/r_core CoreTest
+run "编解码核心" 160 "$JAVA" -Dfile.encoding=UTF-8 -cp build/r_core CoreTest
 
 # 2. 静态审查（读源码做约束检查，必须在项目根目录跑）
 rm -rf build/r_audit && mkdir -p build/r_audit
 "$JAVAC" -encoding UTF-8 -d build/r_audit \
   app/src/com/binf/floater/BinCore.java tools/StaticAudit.java 2>&1 | head -3
-run "静态审查" 145 "$JAVA" -Dfile.encoding=UTF-8 -cp build/r_audit com.binf.floater.StaticAudit
+run "静态审查" 160 "$JAVA" -Dfile.encoding=UTF-8 -cp build/r_audit com.binf.floater.StaticAudit
 
 echo ""
 echo "════════════════════════════════════════"
