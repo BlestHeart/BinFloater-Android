@@ -299,6 +299,32 @@ public class StaticAudit {
         check("编码按钮走三档循环", floCode.contains("return CODEC_MORSE;"), "");
         check("摩斯码地址落盘", floCode.contains("putString(\"codec\", codec)"), "");
 
+        System.out.println("=== J3. 中文电码 / 摩斯播放 ===");
+        String ccc = read(base + "Ccc.java");
+        String cccCode = stripComments(ccc);
+        String ply = read(base + "MorsePlayer.java");
+        String plyCode = stripComments(ply);
+        check("电码表已内置", cccCode.contains("private static final String RAW"), "");
+        check("电码规模由表长推导", cccCode.contains("RAW.length() / 5"), "");
+        check("电码查表走二分", cccCode.contains("Arrays.binarySearch"), "");
+        check("电码有 4 位补零形式", cccCode.contains("public static String code4"), "");
+        check("汉字编码走电码", binCode.contains("Ccc.code4(c)"), "");
+        check("解码认 20 符号的电码词", binCode.contains("code.length() == MORSE_CCC_SYMBOLS"), "");
+        check("表外字符用 ? 占位", binCode.contains("MORSE_PLACEHOLDER"), "");
+        check("emoji 代理对只占一个 ?", binCode.contains("isHighSurrogate"), "");
+        check("超 20 符号的组不偷偷截断", binCode.contains("over = true"), "");
+        check("播放速度有夹取", binCode.contains("public static int dotMs"), "");
+        check("有播放节奏计划", binCode.contains("public static MorsePlan morsePlan"), "");
+        check("播放器用 AudioTrack 现场合成", plyCode.contains("AudioTrack"), "");
+        check("每段头尾淡入淡出", plyCode.contains("FADE_MS"), "");
+        check("播放同时震动", plyCode.contains("VibrationEffect"), "");
+        check("清单声明震动权限", manifest.contains("android.permission.VIBRATE"), "");
+        check("界面有播放按钮", floCode.contains("playBtn"), "");
+        check("播放速度落盘", floCode.contains("morse_wpm"), "");
+        check("震动开关落盘", floCode.contains("morse_vibrate"), "");
+        check("收面板要停播放", floCode.contains("stopMorsePlay();"), "");
+        check("服务销毁要停播放", floCode.contains("player.stop();"), "");
+
         System.out.println("=== J. 检查更新 / 安装器 ===");
         // 26) 打开主界面顺手查一次，24 小时节流；失败静默（国内直连 api.github.com 常超时）
         check("主界面会调自动检查", mainCode.contains("maybeAutoCheckUpdate()"), "");

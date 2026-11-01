@@ -539,7 +539,7 @@ public final class BinCore {
     /**
      * 字符表与码表一一对应：`MORSE_CHARS[i]` 的码就是 `MORSE_CODES[i]`。
      * 只收国际摩斯（ITU-R M.1677-1）的 26 个字母、10 个数字和 18 个常用标点 ——
-     * 摩斯本身没有中文，汉字只能走二进制/Base64 那两条路。
+     * 摩斯码表本身没有汉字，中文走下面「中文电码」那条路。
      */
     private static final String MORSE_CHARS =
             "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.,?!:;\"'-/@()&=+_$";
@@ -553,6 +553,18 @@ public final class BinCore {
 
     /** 摩斯码输入的字符上限。一个字符最多 6 个符号 + 空格，2000 字符约 1.4 万字符输出。 */
     public static final int MORSE_MAX_CHARS = 2000;
+
+    /**
+     * 一个汉字的电码占多少个摩斯符号：4 个数字 × 每个数字 5 个符号。
+     *
+     * <p>这个长度是关键：国际码表里最长的码（标点）也就 6 个符号，字母 1~4、数字正好 5，
+     * 所以「20 个符号连成一个词」在标准摩斯里根本不会出现，拿来当汉字电码的标记
+     * 不会和任何正常内容撞车。
+     */
+    public static final int MORSE_CCC_SYMBOLS = 20;
+
+    /** 两边码表都没有的字符（emoji、日文等）的占位符，国际惯例的「无法表示」。 */
+    public static final char MORSE_PLACEHOLDER = '?';
 
     /** 码 -> 字符 的查表，长度 128（码最长 6 个符号，全是 ASCII，用 String 做键最省事）。 */
     private static final java.util.HashMap<String, Character> MORSE_DECODE =
@@ -591,10 +603,35 @@ public final class BinCore {
     }
 
     /**
+     * 单个字符 -> 一个摩斯「词」。
+     *
+     * <ul>
+     *   <li>码表里有（字母、数字、常用标点）→ 它自己的码；</li>
+     *   <li>汉字 → 4 位中文电码，每位数字转成点划连成 20 个符号；</li>
+     *   <li>两边都没有（emoji、日文、表外生僻字）→ {@link #MORSE_PLACEHOLDER}。</li>
+     * </ul>
+     *
+     * 为什么不直接跳过：跳过的结果是「你发了串摩斯出去，对方收到的句子少一个字」，
+     * 而且发的人看不出来。用 ? 占位至少让两端都能一眼看出「这里有个字没转过去」。
+     */
+    private static String morseTokenOf(char c) {
+        String code = morseCodeOf(c);
+        if (code != null) return code;
+        String ccc = Ccc.code4(c);
+        if (ccc == null) return String.valueOf(MORSE_PLACEHOLDER);
+        StringBuilder sb = new StringBuilder(MORSE_CCC_SYMBOLS);
+        for (int i = 0; i < 4; i++) {
+            sb.append(MORSE_CODES[MORSE_CHARS.indexOf(ccc.charAt(i))]);
+        }
+        return sb.toString();
+    }
+
+    /**
      * 文字 -> 摩斯码。字母之间一个空格，单词之间 {@code " / "}。
      *
-     * 无法表示的字符（汉字、emoji、空格外的大部分符号）直接跳过 —— 与其塞一个
-     * 假的占位符让用户以为译对了，不如什么都不输出，由调用方报告跳过了几个。
+     * 汉字走「中文电码」：一个汉字一个 4 位数字（历史上中文电报就是这套），
+     * 4 个数字连成一个词发出去，解的时候再拼回数字查表。这样中文既真的能
+     * 按摩斯发，也能原样解回汉字。两边码表都没有的字符编成 ?。
      */
     public static String textToMorse(String text) {
         if (text == null || text.isEmpty()) return "";
@@ -604,10 +641,15 @@ public final class BinCore {
         for (int i = 0; i < text.length(); i++) {
             char c = text.charAt(i);
             if (isSpaceChar(c)) { pendingSpace = wrote > 0; continue; }
-            String code = morseCodeOf(c);
-            if (code == null) continue;   // 汉字/emoji 等，跳过
             if (wrote > 0) sb.append(pendingSpace ? " / " : " ");
-            sb.append(code);
+            if (Character.isHighSurrogate(c) && i + 1 < text.length()
+                    && Character.isLowSurrogate(text.charAt(i + 1))) {
+                // emoji 是代理对：两个 char 一个字，只该占一个 ?
+                sb.append(MORSE_PLACEHOLDER);
+                i++;
+            } else {
+                sb.append(morseTokenOf(c));
+            }
             wrote++;
             pendingSpace = false;
         }
@@ -624,20 +666,26 @@ public final class BinCore {
                     + MORSE_MAX_CHARS + " 字符", false, 0, input.length(), 0);
         }
         String morse = textToMorse(input);
-        // 统计跳过了多少：可显示的字符里，有对应码表的才算「用上了」。
-        int used = 0;
+        int used = 0;        // 用国际码表转过去的
+        int ccc = 0;         // 走中文电码的汉字
+        int holes = 0;       // 只能用 ? 占位的
         for (int i = 0; i < input.length(); i++) {
             char c = input.charAt(i);
-            if (!isSpaceChar(c) && morseCodeOf(c) != null) used++;
-        }
-        int skipped = 0;
-        for (int i = 0; i < input.length(); i++) {
-            char c = input.charAt(i);
-            if (!isSpaceChar(c) && morseCodeOf(c) == null) skipped++;
+            if (isSpaceChar(c)) continue;
+            if (morseCodeOf(c) != null) {
+                used++;
+            } else if (Character.isHighSurrogate(c) && i + 1 < input.length()
+                    && Character.isLowSurrogate(input.charAt(i + 1))) {
+                holes++;    // emoji 的代理对算一个字
+                i++;
+            } else if (Ccc.code4(c) != null) {
+                ccc++;
+            } else {
+                holes++;
+            }
         }
         if (morse.isEmpty()) {
-            return new MorseResult(null, "没有可转成摩斯码的字符（只支持 A-Z、0-9 和常用标点，"
-                    + "摩斯码表示不了中文）", false, 0, used, skipped);
+            return new MorseResult(null, "没有可转成摩斯码的字符", false, 0, used, holes);
         }
         int symbols = 0;
         for (int i = 0; i < morse.length(); i++) {
@@ -645,8 +693,9 @@ public final class BinCore {
             if (c == '.' || c == '-') symbols++;
         }
         String msg = "已编码 " + used + " 字符 → " + symbols + " 个摩斯符号";
-        if (skipped > 0) msg += "，跳过 " + skipped + " 个无法表示的字符（摩斯码没有中文）";
-        return new MorseResult(morse, msg, true, symbols, used, skipped);
+        if (ccc > 0) msg += "，其中 " + ccc + " 个汉字走中文电码（4 位数字）";
+        if (holes > 0) msg += "，" + holes + " 个字符码表里没有（emoji、日文等），用 ? 占位";
+        return new MorseResult(morse, msg, true, symbols, used + ccc, holes);
     }
 
     /** 摩斯码里允许出现的分隔符：空格、斜杠（词）、竖线（词）、制表换行。 */
@@ -655,9 +704,51 @@ public final class BinCore {
     }
 
     /**
+     * 解一组码（不含分隔符）。返回解出来的那一串，并把计数写回 {@code counts}：
+     * {@code counts[0]} = 占位符（?）个数，{@code counts[1]} = 对不上码表的组数。
+     *
+     * <p>一组的三种可能：查国际码表；20 个符号 = 中文电码（4 位数字拼回去查表）；
+     * 都不是就当 ? 占位。电码表里没有的那 4 位数字原样留着——
+     * 至少信息没丢，总比吞掉强。
+     */
+    /** 一组符号超过 20 个（连写太多）：当解析不了的组处理，别偷偷截断丢掉后半截。 */
+    private static String badToken(int[] counts) {
+        counts[1]++;
+        return String.valueOf(MORSE_PLACEHOLDER);
+    }
+
+    private static String decodeToken(String code, int[] counts) {
+        String placeholder = String.valueOf(MORSE_PLACEHOLDER);
+        if (placeholder.equals(code)) {
+            counts[0]++;
+            return placeholder;
+        }
+        Character dec = MORSE_DECODE.get(code);
+        if (dec != null) return String.valueOf(dec.charValue());
+        if (code.length() == MORSE_CCC_SYMBOLS) {
+            StringBuilder digits = new StringBuilder(4);
+            boolean allDigits = true;
+            for (int i = 0; i < MORSE_CCC_SYMBOLS; i += 5) {
+                Character d = MORSE_DECODE.get(code.substring(i, i + 5));
+                if (d == null || !Character.isDigit(d.charValue())) { allDigits = false; break; }
+                digits.append(d.charValue());
+            }
+            if (allDigits) {
+                char han = Ccc.hanziOf(Integer.parseInt(digits.toString()));
+                return han != 0 ? String.valueOf(han) : digits.toString();
+            }
+        }
+        counts[1]++;
+        return placeholder;
+    }
+
+    /**
      * 摩斯码 -> 文字。分词用空格，词间用 {@code /}；多个分隔符连写当作一个。
      *
      * 输出统一大写：码表里 '.'/'..' 本来就不分大小写，明确一种写法比「猜原来的大小写」诚实。
+     *
+     * 对不上码表的组不再直接判失败：解出来的部分照给，对几个、错几个写在说明里。
+     * 以前这里是「有一组不对就整体失败」，结果中文句子里夹一个 emoji 占位就再也解不动了。
      */
     public static MorseResult morseDecode(String input) {
         if (input == null || input.trim().isEmpty()) {
@@ -668,10 +759,10 @@ public final class BinCore {
                     + MORSE_MAX_CHARS + " 字符", false, 0, 0, 0);
         }
         StringBuilder out = new StringBuilder(input.length() / 3 + 1);
-        StringBuilder tok = new StringBuilder(8);
+        StringBuilder tok = new StringBuilder(MORSE_CCC_SYMBOLS + 2);
         int symbols = 0;
-        int unknown = 0;
-        String firstUnknown = null;
+        int[] counts = new int[2];
+        boolean over = false;   // 这一组超过 20 个符号，解码时整组当对不上
         int i = 0;
         while (i < input.length()) {
             char c = input.charAt(i);
@@ -679,55 +770,57 @@ public final class BinCore {
                 // '/' 和 '|' 是词分隔，空格是字母分隔。连写的分隔符里只要有词分隔就补空格。
                 boolean word = (c == '/' || c == '|' || c == '\uFF0F');
                 if (tok.length() > 0) {
-                    Character dec = MORSE_DECODE.get(tok.toString());
-                    if (dec == null) {
-                        unknown++;
-                        if (firstUnknown == null) firstUnknown = tok.toString();
-                    } else {
-                        out.append(dec.charValue());
-                    }
+                    out.append(over ? badToken(counts) : decodeToken(tok.toString(), counts));
                     tok.setLength(0);
+                    over = false;
                 }
                 if (word && out.length() > 0
                         && out.charAt(out.length() - 1) != ' ') out.append(' ');
                 i++;
                 continue;
             }
-            if (c == '.' || c == '-') {
-                symbols++;
-                if (tok.length() < 8) tok.append(c);
+            if (c == '.' || c == '-' || c == MORSE_PLACEHOLDER) {
+                if (c != MORSE_PLACEHOLDER) symbols++;
+                // ? 是单字符占位，自成一组，不能和后面的 . - 粘在一起
+                if (c == MORSE_PLACEHOLDER) {
+                    if (tok.length() > 0) {
+                        out.append(over ? badToken(counts) : decodeToken(tok.toString(), counts));
+                        tok.setLength(0);
+                        over = false;
+                    }
+                    out.append(decodeToken(String.valueOf(MORSE_PLACEHOLDER), counts));
+                    i++;
+                    continue;
+                }
+                if (tok.length() < MORSE_CCC_SYMBOLS) tok.append(c);
+                else over = true;
                 i++;
                 continue;
             }
             return new MorseResult(null, "包含摩斯码里没有的字符：" + c
-                    + "（只认 . - 和空格 / ）", false, symbols, 0, 0);
+                    + "（只认 . - ? 和空格 / ）", false, symbols, 0, 0);
         }
         if (tok.length() > 0) {
-            Character dec = MORSE_DECODE.get(tok.toString());
-            if (dec == null) {
-                unknown++;
-                if (firstUnknown == null) firstUnknown = tok.toString();
-            } else {
-                out.append(dec.charValue());
-            }
+            out.append(over ? badToken(counts) : decodeToken(tok.toString(), counts));
         }
         while (out.length() > 0 && out.charAt(out.length() - 1) == ' ') {
             out.setLength(out.length() - 1);
         }
-        if (unknown > 0) {
-            return new MorseResult(null, "有 " + unknown + " 组不是合法摩斯码（第一组是 \""
-                    + firstUnknown + "\"），检查一下 . 和 - 的顺序", false, symbols, 0, 0);
-        }
         if (out.length() == 0) {
             return new MorseResult(null, "没有可识别的摩斯码", false, symbols, 0, 0);
         }
-        return new MorseResult(out.toString(), "已解码 " + symbols + " 个摩斯符号 → "
-                + out.length() + " 个字符", true, symbols, out.length(), 0);
+        String msg = "已解码 " + symbols + " 个摩斯符号 → " + out.length() + " 个字符";
+        if (counts[1] > 0) msg += "，其中 " + counts[1] + " 组对不上码表（用 ? 占位）";
+        if (counts[0] > 0) msg += "，" + counts[0] + " 个 ? 是编码时就占位的字符";
+        return new MorseResult(out.toString(), msg, true, symbols, out.length(), counts[0]);
     }
 
     /**
      * 是否「像一段摩斯码」。刻意严格，避免把正文里的破折号、省略号误判：
-     * 只能由 . - 空格 / | 组成，至少 2 组、至少 4 个符号，而且**每一组都得能查到字符**。
+     * 只能由 . - ? 空格 / | 组成，至少 2 组、至少 4 个符号，而且**每一组都得解得出东西**。
+     *
+     * <p>单组符号上限是 {@link #MORSE_CCC_SYMBOLS}（20）而不是 8：汉字电码本身就是
+     * 20 个符号连成一个词，按 8 卡会把「中文编出来的摩斯」判成不是摩斯。
      */
     public static boolean looksLikeMorse(String text) {
         if (text == null) return false;
@@ -741,7 +834,12 @@ public final class BinCore {
             char c = t.charAt(i);
             if (c == '.' || c == '-') {
                 symbols++;
-                if (++runLen > 8) return false;   // 连写超过 8 个符号不可能是单个字符
+                // 连写超过 20 个符号不可能是单个字符（汉字电码正好 20 个）
+                if (++runLen > MORSE_CCC_SYMBOLS) return false;
+            } else if (c == MORSE_PLACEHOLDER) {
+                if (runLen > 0) groups++;
+                groups++;
+                runLen = 0;
             } else if (isMorseSeparator(c)) {
                 if (runLen > 0) groups++;
                 runLen = 0;
@@ -753,6 +851,114 @@ public final class BinCore {
         if (groups < 2 || symbols < 4) return false;
         MorseResult r = morseDecode(t);
         return r.ok && r.chars > 0;
+    }
+
+    // ---------- 摩斯播放的节奏 ----------
+
+    /** 播放速度范围（WPM）。手键一般在 12~25 之间，留宽一点给快慢两极。 */
+    public static final int MORSE_MIN_WPM = 5;
+    public static final int MORSE_MAX_WPM = 60;
+
+    /**
+     * 一个「点」占多少毫秒。按标准 PARIS 计时：每 WPM 个 PARIS/分钟，
+     * 一个 PARIS = 50 个点单位 → 点 = 1200 / WPM 毫秒。
+     * （20 WPM → 60ms，和真实的 20 WPM 报到速度一致。）
+     */
+    public static int dotMs(int wpm) {
+        int w = Math.max(MORSE_MIN_WPM, Math.min(MORSE_MAX_WPM, wpm));
+        return Math.max(8, Math.round(1200f / w));
+    }
+
+    /** 词分隔符（字母之间是空格，词之间是 / | ／）。 */
+    private static boolean isMorseWordSep(char c) {
+        return c == '/' || c == '|' || c == '\uFF0F';
+    }
+
+    /** 播放计划：{@code pattern} 是交替的「发声, 静音, 发声, 静音…」毫秒数，以发声开头。 */
+    public static final class MorsePlan {
+        public final int[] pattern;
+        public final boolean truncated;   // 是不是因为太长被截断了
+        public final int totalMs;
+
+        MorsePlan(int[] pattern, boolean truncated, int totalMs) {
+            this.pattern = pattern;
+            this.truncated = truncated;
+            this.totalMs = totalMs;
+        }
+    }
+
+    /**
+     * 把一段摩斯码排成播放计划。
+     *
+     * <p>节奏照标准来：点 1 单位、划 3 单位、同一字母内符号间隔 1 单位、
+     * 字母之间 3 单位、词之间 7 单位。{@code ?} 占位符没有真正的节奏，
+     * 给它一个「点 + 字母间隔」，听感上就是「这里缺了一个字」。
+     *
+     * @param maxMs 总时长上限，超了就截断（手机面板上没人要听三分钟摩斯）
+     */
+    public static MorsePlan morsePlan(String morse, int wpm, int maxMs) {
+        if (morse == null || morse.isEmpty()) return new MorsePlan(new int[0], false, 0);
+        int dot = dotMs(wpm);
+        int cap = Math.max(dot, maxMs);
+
+        // 先把「词」切出来，并记住每个词前面是不是词分隔 —— 间隔多长要用到
+        java.util.ArrayList<String> tokens = new java.util.ArrayList<String>();
+        java.util.ArrayList<Boolean> wordGap = new java.util.ArrayList<Boolean>();
+        int i = 0;
+        int len = morse.length();
+        boolean pendingWord = false;
+        while (i < len) {
+            char c = morse.charAt(i);
+            if (isMorseSeparator(c)) {
+                if (isMorseWordSep(c)) pendingWord = true;
+                i++;
+                continue;
+            }
+            int j = i;
+            while (j < len && !isMorseSeparator(morse.charAt(j))) j++;
+            tokens.add(morse.substring(i, j));
+            wordGap.add(Boolean.valueOf(pendingWord));
+            pendingWord = false;
+            i = j;
+        }
+
+        int maxSymbols = 0;
+        for (int t = 0; t < tokens.size(); t++) maxSymbols += tokens.get(t).length();
+        int[] ons = new int[maxSymbols];
+        int[] offs = new int[maxSymbols];
+        int count = 0;
+        int total = 0;
+        boolean truncated = false;
+        outer:
+        for (int t = 0; t < tokens.size(); t++) {
+            String token = tokens.get(t);
+            boolean lastToken = (t == tokens.size() - 1);
+            int gapAfter = lastToken ? 0
+                    : (wordGap.get(t + 1).booleanValue() ? 7 : 3) * dot;
+            for (int k = 0; k < token.length(); k++) {
+                char c = token.charAt(k);
+                int on;
+                int off;
+                if (c == MORSE_PLACEHOLDER) {
+                    on = dot;
+                    off = gapAfter;
+                } else {
+                    on = (c == '-') ? 3 * dot : dot;
+                    off = (k == token.length() - 1) ? gapAfter : dot;
+                }
+                if (total + on + off > cap) { truncated = true; break outer; }
+                ons[count] = on;
+                offs[count] = off;
+                count++;
+                total += on + off;
+            }
+        }
+        int[] pattern = new int[count * 2];
+        for (int k = 0; k < count; k++) {
+            pattern[k * 2] = ons[k];
+            pattern[k * 2 + 1] = offs[k];
+        }
+        return new MorsePlan(pattern, truncated, total);
     }
 
     /** 自动判定方向。 */

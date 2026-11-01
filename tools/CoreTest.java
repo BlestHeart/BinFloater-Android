@@ -1,9 +1,19 @@
 import com.binf.floater.BinCore;
+import com.binf.floater.Ccc;
 import com.binf.floater.VersionUtil;
 
 /** BinCore 自测：不依赖 Android，可直接用 java 运行。 */
 public class CoreTest {
     static int pass = 0, fail = 0;
+
+    static String joinInts(int[] a) {
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < a.length; i++) {
+            if (i > 0) sb.append(' ');
+            sb.append(a[i]);
+        }
+        return sb.toString();
+    }
 
     static void eq(String label, Object actual, Object expect) {
         boolean ok = expect == null ? actual == null : expect.equals(actual);
@@ -244,8 +254,17 @@ public class CoreTest {
         eq("斜杠字符本身有码", BinCore.textToMorse("/"), "-..-.");
         eq("空串", BinCore.textToMorse(""), "");
         eq("null 安全", BinCore.textToMorse(null), "");
-        eq("中文跳过", BinCore.textToMorse("中文"), "");
-        eq("中英混排只留英文", BinCore.textToMorse("中A文B"), ".- -...");
+        String cn2 = BinCore.textToMorse("中文");
+        eq("两个汉字两个词", cn2.split(" ").length, 2);
+        eq("汉字词长 20 个符号", cn2.split(" ")[0].length(), BinCore.MORSE_CCC_SYMBOLS);
+        eq("中文解回", BinCore.morseDecode(cn2).text, "中文");
+        String mix = BinCore.textToMorse("中A文B");
+        eq("中英混排按词切", mix.split(" ").length, 4);
+        eq("混排第二个字母", mix.split(" ")[1], ".-");
+        eq("混排第四个字母", mix.split(" ")[3], "-...");
+        eq("混排能解回", BinCore.morseDecode(mix).text, "中A文B");
+        eq("emoji 只占一个 ?", BinCore.textToMorse("a\uD83D\uDE42b"), ".- ? -...");
+        eq("? 解回原样占位", BinCore.morseDecode(".- ? -...").text, "A?B");
 
         System.out.println("== 13b. 摩斯码解码 ==");
         eq("解回 HELLO", BinCore.morseDecode(".... . .-.. .-.. ---").text, "HELLO");
@@ -258,7 +277,11 @@ public class CoreTest {
         check("null 被拒", !BinCore.morseDecode(null).ok);
         check("纯分隔符被拒", !BinCore.morseDecode(" /  / ").ok);
         check("非法字符被拒", !BinCore.morseDecode(".- x").ok);
-        check("不存在的码被拒", !BinCore.morseDecode("........").ok);
+        // 行为已改：对不上的组不再整体失败，用 ? 占位、其它部分照解。
+        eq("未知组占位不整体失败", BinCore.morseDecode("........").text, "?");
+        check("未知组写进说明", BinCore.morseDecode("........").message.contains("对不上码表"));
+        eq("超 20 符号的组当未知组", BinCore.morseDecode("......................................").text, "?");
+        eq("电码查不到时留着 4 位数字", BinCore.morseDecode("----.----.----.----.").text, "9999");
 
         System.out.println("== 13c. 摩斯码往返 ==");
         String[] morseSamples = {"SOS", "HELLO WORLD", "A1 B2", "TEST 123"};
@@ -279,13 +302,56 @@ public class CoreTest {
         check("autoDetect 二进制优先于摩斯", BinCore.autoDetect("01001000 01101001").equals("bin2text"));
 
         System.out.println("== 13e. 编码结果与统计 ==");
-        BinCore.MorseResult enc = BinCore.morseEncode("Hi 中文");
-        eq("混排只编码能表示的", enc.text, ".... ..");
-        eq("跳过的字数", enc.skipped, 2);
+        BinCore.MorseResult enc = BinCore.morseEncode("Hi \u4e2d\u6587");
+        eq("混排全部编码（4 个词 + 1 个斜杠）", enc.text.split(" ").length, 5);
         eq("成功标记", enc.ok ? 1 : 0, 1);
-        check("说明里点出跳过", enc.message.contains("跳过 2"));
-        check("中文全跳过时报错", !BinCore.morseEncode("全部中文").ok);
+        eq("没有跳过任何字", enc.skipped, 0);
+        check("说明里点出电码", enc.message.contains("中文电码"));
+        check("纯中文也能编码", BinCore.morseEncode("\u4f60\u597d").ok);
+        BinCore.MorseResult hole = BinCore.morseEncode("A\uD83D\uDE42B");
+        eq("emoji 记一个占位", hole.skipped, 1);
+        check("说明里点出占位", hole.message.contains("用 ? 占位"));
         check("超长输入被拒", !BinCore.morseEncode(new String(new char[BinCore.MORSE_MAX_CHARS + 1]).replace('\0', 'a')).ok);
+
+        System.out.println("== 13f. 中文电码表 ==");
+        eq("码表规模", Ccc.SIZE, 7078);
+        eq("你 = 0132", Ccc.code4('\u4f60'), "0132");
+        eq("国 = 0948", Ccc.code4('\u56fd'), "0948");
+        eq("一 = 0001（左侧补零）", Ccc.code4('\u4e00'), "0001");
+        eq("汉字都有 4 位码", Ccc.code4('\u4e2d').length(), 4);
+        eq("字母不在码表", Ccc.code4('A'), null);
+        eq("codeOf 查不到返回 -1", Ccc.codeOf('A'), -1);
+        eq("codeOf 与 code4 一致", Ccc.codeOf('\u4f60'), 132);
+        eq("反查 132", Ccc.hanziOf(132), '\u4f60');
+        eq("反查 948", Ccc.hanziOf(948), '\u56fd');
+        eq("反查 1", Ccc.hanziOf(1), '\u4e00');
+        eq("反查查不到返回 0", Ccc.hanziOf(9999), (char) 0);
+
+        System.out.println("== 13g. 摩斯播放节奏 ==");
+        eq("20 WPM 一个点", BinCore.dotMs(20), 60);
+        eq("5 WPM 一个点", BinCore.dotMs(5), 240);
+        eq("60 WPM 一个点", BinCore.dotMs(60), 20);
+        eq("超过 60 WPM 夹住", BinCore.dotMs(100), 20);
+        eq("低于 5 WPM 夹住", BinCore.dotMs(1), 240);
+        BinCore.MorsePlan p1 = BinCore.morsePlan(".", 20, 60000);
+        eq("单点节奏", joinInts(p1.pattern), "60 0");
+        eq("单点时长", p1.totalMs, 60);
+        BinCore.MorsePlan p2 = BinCore.morsePlan(".... .", 20, 60000);
+        eq("HE 节奏", joinInts(p2.pattern), "60 60 60 60 60 60 60 180 60 0");
+        eq("HE 时长", p2.totalMs, 660);
+        BinCore.MorsePlan p3 = BinCore.morsePlan("... / ---", 20, 60000);
+        eq("词间隔 7 单位", p3.totalMs, 1380);
+        check("节奏表以发声开头", p3.pattern[0] == 60);
+        check("未截断标记", !p3.truncated);
+        BinCore.MorsePlan cut = BinCore.morsePlan(".... . . .", 20, 100);
+        check("超上限被截断", cut.truncated);
+        eq("截断后没排进去", cut.pattern.length, 0);
+        BinCore.MorsePlan empty = BinCore.morsePlan("", 20, 60000);
+        eq("空输入没有节奏", empty.pattern.length, 0);
+        eq("空输入时长 0", empty.totalMs, 0);
+        BinCore.MorsePlan cnPlan = BinCore.morsePlan(BinCore.textToMorse("\u4f60\u597d"), 20, 60000);
+        check("中文摩斯也能排节奏", cnPlan.pattern.length > 0);
+        check("节奏表长度是偶数", cnPlan.pattern.length % 2 == 0);
 
         System.out.println();
         System.out.println("结果：通过 " + pass + " 项，失败 " + fail + " 项");

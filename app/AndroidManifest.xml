@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.binf.floater"
-    android:versionCode="6"
-    android:versionName="2.6">
+    android:versionCode="8"
+    android:versionName="2.8">
 
     <uses-sdk android:minSdkVersion="34" android:targetSdkVersion="36" />
 
@@ -13,6 +13,8 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <!-- 检查更新：只有「打开主界面时查一次 GitHub Releases」用到，24 小时一次 -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- 播摩斯码时要能震动（静音场合靠它敲节奏） -->
+    <uses-permission android:name="android.permission.VIBRATE" />
     <!-- 下载完 APK 后拉起系统安装器 -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 

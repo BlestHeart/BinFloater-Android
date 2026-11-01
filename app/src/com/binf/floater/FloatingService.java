@@ -177,6 +177,15 @@ public class FloatingService extends Service {
     /** 0..3 → BUBBLE_ALPHAS 下标。 */
     private int bubbleAlpha = 1;
 
+    /** 摩斯码播放器。懒建 —— 没点过「播放」就不占一枚 AudioTrack。 */
+    private MorsePlayer player;
+    /** 摩斯速度（词/分钟）。 */
+    private int morseWpm = 20;
+    /** 播摩斯时要不要同时震动。 */
+    private boolean morseVibrate = true;
+    /** 第二行那个「♪ 播放」按钮。 */
+    private TextView playBtn;
+
     /** 面板被用户拖动过之后就固定在那个位置，不再跟着球走。 */
     private boolean panelPinned = false;
     private int panelX = 0;
@@ -230,6 +239,8 @@ public class FloatingService extends Service {
         codec = normalizeCodec(p.getString("codec", CODEC_BIN));
         bubbleScale = clamp(p.getInt("bubble_scale", 1), 0, BUBBLE_SCALES.length - 1);
         bubbleAlpha = clamp(p.getInt("bubble_alpha", 1), 0, BUBBLE_ALPHAS.length - 1);
+        morseWpm = clamp(p.getInt("morse_wpm", 20), BinCore.MORSE_MIN_WPM, BinCore.MORSE_MAX_WPM);
+        morseVibrate = p.getBoolean("morse_vibrate", true);
         panelPinned = p.getBoolean("panel_pinned", false);
         panelX = p.getInt("panel_x", 0);
         panelY = p.getInt("panel_y", 0);
@@ -774,6 +785,8 @@ public class FloatingService extends Service {
 
     private void hidePanel() {
         if (panelVisible && panel != null) {
+            // 面板都收了就别还在后台嘀嘀嗒嗒 —— 用户已经看不到那个按钮了。
+            stopMorsePlay();
             // 收起前把当前输入记进历史，省得用户手打的内容丢在面板里。
             // 刚点过「清空历史」就别记了 —— 否则一收面板又冒出一条，
             // 用户点了个「清空」却看见列表里还有东西，会以为没清掉。
@@ -822,6 +835,14 @@ public class FloatingService extends Service {
         }));
         m.addView(menuBtn("▤  编码：" + codecName(), v -> {
             toggleCodec();
+            hideMenu();
+        }));
+        m.addView(menuBtn("♪  摩斯速度：" + morseWpm + " WPM", v -> {
+            cycleMorseWpm();
+            hideMenu();
+        }));
+        m.addView(menuBtn("📳  播放震动：" + (morseVibrate ? "开" : "关"), v -> {
+            toggleMorseVibrate();
             hideMenu();
         }));
         m.addView(menuBtn("📋  读剪切板", v -> { hideMenu(); readClip(false); }));
@@ -1265,6 +1286,13 @@ public class FloatingService extends Service {
                 ViewGroup.LayoutParams.MATCH_PARENT, dp(32));
         r2lp.topMargin = dp(4);
         root.addView(row2, r2lp);
+        playBtn = actionBtn("♪ 播放", v -> toggleMorsePlay());
+        playBtn.setContentDescription("播放摩斯码音调，长按改速度");
+        playBtn.setOnLongClickListener(v -> {
+            cycleMorseWpm();
+            return true;
+        });
+        row2.addView(playBtn, weight(1.1f));
         row2.addView(actionBtn("清空历史", v -> clearHistory()), weight(1f));
         row2.addView(actionBtn("面板归位", v -> unpinPanel()), weight(1f));
 
@@ -1525,6 +1553,115 @@ public class FloatingService extends Service {
         }
     }
 
+    // ---------- 摩斯码播放 ----------
+
+    /** 当前方向是不是摩斯码 —— 只有这时才谈得上「播出来」。 */
+    private boolean isMorseDir() {
+        return DIR_TEXT2MORSE.equals(dir) || DIR_MORSE2TEXT.equals(dir);
+    }
+
+    /**
+     * 该播的那段摩斯码：文→摩时是输出，摩→文时是输入。
+     * 自动识别下 dir 会随内容变，所以按 dir 现取，不写死。
+     */
+    private String morseToPlay() {
+        if (DIR_TEXT2MORSE.equals(dir)) {
+            if (fullOutput != null && !fullOutput.isEmpty()) return fullOutput;
+            return output == null ? "" : output.getText().toString();
+        }
+        if (DIR_MORSE2TEXT.equals(dir)) {
+            return input == null ? "" : input.getText().toString();
+        }
+        return "";
+    }
+
+    private void toggleMorsePlay() {
+        if (player != null && player.isPlaying()) {
+            stopMorsePlay();
+            return;
+        }
+        startMorsePlay();
+    }
+
+    private void startMorsePlay() {
+        if (!isMorseDir()) {
+            toast("先切到摩斯码方向再播放");
+            return;
+        }
+        String morse = morseToPlay();
+        if (morse.trim().isEmpty()) {
+            toast("这里还没有摩斯码");
+            return;
+        }
+        if (player == null) player = new MorsePlayer(this);
+        String err = player.start(morse, morseWpm, morseVibrate, new MorsePlayer.Listener() {
+            @Override public void onTone(boolean on) {
+                // 让按钮跟着「滴嗒」闪：不用另做指示灯，用户的眼睛本来就在按钮上。
+                if (playBtn != null) playBtn.setAlpha(on ? 0.4f : 1f);
+            }
+
+            @Override public void onFinished() {
+                // 播完把按钮和状态行还原，别一直停在「停止 / 播放中」
+                refreshPlayBtn();
+                refresh();
+            }
+        });
+        if (err != null) {
+            toast(err);
+            return;
+        }
+        if (player.lastTruncated()) {
+            toast("太长，只播前 " + (MorsePlayer.MAX_PLAY_MS / 1000) + " 秒");
+        }
+        refreshPlayBtn();
+    }
+
+    private void stopMorsePlay() {
+        if (player != null) {
+            player.stop();
+            if (playBtn != null) playBtn.setAlpha(1f);
+        }
+        refreshPlayBtn();
+    }
+
+    /** 播放按钮的文案与状态：只有摩斯方向才亮着，播着的时候变成「停止」。 */
+    private void refreshPlayBtn() {
+        if (playBtn == null) return;
+        boolean playing = player != null && player.isPlaying();
+        playBtn.setText(playing ? "♪ 停止" : "♪ 播放");
+        if (!playing) playBtn.setAlpha(isMorseDir() ? 1f : 0.4f);
+    }
+
+    /** WPM 档位。整档跳而不是 +1，免得点十下才从 10 走到 30。 */
+    private static final int[] MORSE_WPM_STEPS = {10, 15, 20, 25, 30, 40};
+
+    private void cycleMorseWpm() {
+        int next = MORSE_WPM_STEPS[0];
+        boolean seen = false;
+        for (int i = 0; i < MORSE_WPM_STEPS.length; i++) {
+            if (MORSE_WPM_STEPS[i] > morseWpm) {
+                next = MORSE_WPM_STEPS[i];
+                seen = true;
+                break;
+            }
+        }
+        if (!seen) next = MORSE_WPM_STEPS[0];
+        morseWpm = next;
+        try { prefs().edit().putInt("morse_wpm", morseWpm).apply(); } catch (Exception ignored) {}
+        toast("摩斯速度：" + morseWpm + " WPM");
+        // 播着换速度：停下按新速度重播，别让人听一半突然变速
+        if (player != null && player.isPlaying()) {
+            player.stop();
+            startMorsePlay();
+        }
+    }
+
+    private void toggleMorseVibrate() {
+        morseVibrate = !morseVibrate;
+        try { prefs().edit().putBoolean("morse_vibrate", morseVibrate).apply(); } catch (Exception ignored) {}
+        toast(morseVibrate ? "播放时震动：开" : "播放时震动：关");
+    }
+
     /** 只有「文字 → 二进制」才需要显示格式（8位/4位/连写/HEX）。 */
     private boolean usesRenderMode() {
         return DIR_TEXT2BIN.equals(dir);
@@ -1548,6 +1685,7 @@ public class FloatingService extends Service {
             // 文字会和背景融成一片，按钮看起来像消失了（v2.3 真机验收踩到）。
             modeBtn.setAlpha(usesRenderMode() ? 1f : 0.4f);
         }
+        refreshPlayBtn();
     }
 
     /** 输入防抖：删掉待执行的刷新，立刻算一次（读剪切板/切方向/清空时用）。 */
@@ -1830,6 +1968,10 @@ public class FloatingService extends Service {
         // 但桌面上根本没有小球 —— 用户还得回软件重新开关一次才能恢复。
         setEnabledPref(false);
         if (handler != null) handler.removeCallbacksAndMessages(null);
+        if (player != null) {
+            player.stop();
+            player = null;
+        }
         hideMenu();
         if (bubble != null && wm != null) {
             try { wm.removeView(bubble); } catch (Exception ignored) {}
