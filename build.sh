@@ -16,8 +16,11 @@ APK_NAME="BinFloater.apk"
 PKG="com.binf.floater"
 MIN_SDK=34
 TARGET_SDK=36
-VERSION_CODE=9
-VERSION_NAME="2.9"
+VERSION_CODE=10
+VERSION_NAME="2.10"
+
+# 版本必须同时更新 manifest；aapt2 不会覆盖 manifest 已有的 versionCode/versionName。
+# 发版后用 aapt2 dump badging 再核对，避免 version.json 比 APK 新。
 
 echo "==> 清理"
 rm -rf "$OUT/gen" "$OUT/classes" "$OUT/dex" "$OUT/flat" "$OUT/base.apk" "$OUT/$APK_NAME"
