@@ -230,10 +230,10 @@ public class FloatingService extends Service {
     @Override
     public void onCreate() {
         super.onCreate();
-        running = true;
+        // 只有 onCreate + createBubble 都成功后，running 才允许置 true。
+        // 不能在这里提前报喜：窗口添加失败时主界面可能刚好读到这个瞬间。
         // 服务真的起来了，开关状态就跟着「开」。和 onDestroy 里的回写配对，
         // 不管是从主界面开、被系统重启、还是长按 ✕ 关，主界面显示的永远是实际状态。
-        setEnabledPref(true);
         wm = (WindowManager) getSystemService(Context.WINDOW_SERVICE);
         handler = new Handler(Looper.getMainLooper());
         pal = Palette.get(this);
@@ -250,11 +250,35 @@ public class FloatingService extends Service {
         loadHistory();
         startForegroundSafe();
         createBubble();
+        if (bubble != null && foregroundOk) {
+            running = true;
+            setEnabledPref(true);
+        } else {
+            running = false;
+            setEnabledPref(false);
+            stopSelf();
+        }
     }
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
         String action = intent == null ? null : intent.getAction();
+        // 系统可能撤销悬浮窗权限而保留进程。不要把残留 View 当成可用悬浮窗。
+        if (!android.provider.Settings.canDrawOverlays(this)) {
+            running = false;
+            setEnabledPref(false);
+            stopSelf();
+            return START_NOT_STICKY;
+        }
+        if (bubble == null) createBubble();
+        if (bubble == null || !foregroundOk) {
+            running = false;
+            setEnabledPref(false);
+            stopSelf();
+            return START_NOT_STICKY;
+        }
+        running = true;
+        setEnabledPref(true);
         if (ACTION_STOP.equals(action)) {
             setEnabledPref(false);
             stopSelf();
@@ -2002,6 +2026,13 @@ public class FloatingService extends Service {
 
     private void toast(String s) {
         Toast.makeText(this, s, Toast.LENGTH_SHORT).show();
+    }
+
+    @Override
+    public void onTaskRemoved(Intent rootIntent) {
+        // 最近任务划掉 Activity 不等于关闭前台服务。保留 START_STICKY，
+        // 由系统决定是否重建；不要在这里把 floating_enabled 写成 false。
+        super.onTaskRemoved(rootIntent);
     }
 
     @Override

@@ -1,6 +1,8 @@
 package com.binf.floater;
 
 import android.app.Activity;
+import android.content.ActivityNotFoundException;
+import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
@@ -8,6 +10,7 @@ import android.graphics.Typeface;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.PowerManager;
 import android.provider.Settings;
 import android.util.TypedValue;
 import android.view.Gravity;
@@ -299,6 +302,8 @@ public class MainActivity extends Activity {
         chlp.topMargin = dp(12);
         dataCard.addView(clearHist, chlp);
 
+        if (XiaomiSettings.isXiaomiFamily()) addXiaomiCard();
+
         // 版本 + 重置
         addSectionTitle("版本");
         LinearLayout verCard = makeCard();
@@ -330,6 +335,90 @@ public class MainActivity extends Activity {
         whyCard.addView(why);
 
         return scroll;
+    }
+
+    /** 小米 / 澎湃的额外权限入口。都是用户主动点击才跳转，不自动授权。 */
+    private void addXiaomiCard() {
+        addSectionTitle("小米 / 澎湃适配");
+        LinearLayout card = makeCard();
+        TextView note = new TextView(this);
+        note.setText("不同系统版本的页面可能不同。若跳转失败，会回退到本应用详情页；返回后请以这里显示的实际权限和悬浮球状态为准。");
+        note.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+        note.setTextColor(pal.muted);
+        note.setLineSpacing(dp(3), 1f);
+        card.addView(note);
+        addSettingsButton(card, "悬浮窗 / 后台弹出界面设置", v -> {
+            if (!openFirst(XiaomiSettings.overlayIntents(this))) {
+                openAppDetails("找不到系统权限页，请手动开启悬浮窗权限");
+            }
+        });
+        addSettingsButton(card, "后台弹出界面（部分系统需要）", v -> {
+            if (!openFirst(XiaomiSettings.backgroundStartIntents(this))) {
+                openAppDetails("找不到后台弹出设置，请到应用详情页手动检查");
+            }
+        });
+        addSettingsButton(card, "自启动管理", v -> {
+            if (!openFirst(XiaomiSettings.autoStartIntents(this))) {
+                openAppDetails("找不到自启动页面，请到系统设置中手动开启");
+            }
+        });
+        addSettingsButton(card, "忽略电池优化", v -> requestBatteryOptimization());
+    }
+
+    private void addSettingsButton(LinearLayout card, String label, View.OnClickListener listener) {
+        Button b = makeButton(label, false);
+        b.setOnClickListener(listener);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(42));
+        lp.topMargin = dp(10);
+        card.addView(b, lp);
+    }
+
+    private boolean openFirst(Intent[] candidates) {
+        for (Intent candidate : candidates) {
+            if (candidate == null) continue;
+            try {
+                ComponentName cn = candidate.getComponent();
+                if (cn != null && getPackageManager().resolveActivity(candidate, 0) == null) {
+                    continue;
+                }
+                startActivity(candidate);
+                return true;
+            } catch (ActivityNotFoundException | SecurityException ignored) {
+                // 厂商设置页不是公开 API，某个 ROM 没有它很正常，继续试下一个。
+            } catch (RuntimeException ignored) {
+                // 个别 ROM 会在这里抛 IllegalArgumentException，不能让它把主界面打崩。
+            }
+        }
+        return false;
+    }
+
+    private void openAppDetails(String message) {
+        toast(message);
+        try {
+            startActivity(new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                    Uri.parse("package:" + getPackageName())));
+        } catch (ActivityNotFoundException | SecurityException e) {
+            toast("请手动打开系统设置中的应用详情页");
+        } catch (RuntimeException e) {
+            toast("系统拒绝了跳转，请手动打开应用详情页");
+        }
+    }
+
+    private void requestBatteryOptimization() {
+        PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
+        if (pm != null && pm.isIgnoringBatteryOptimizations(getPackageName())) {
+            toast("已经忽略电池优化");
+            return;
+        }
+        try {
+            startActivity(new Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                    Uri.parse("package:" + getPackageName())));
+        } catch (ActivityNotFoundException | SecurityException e) {
+            openAppDetails("无法直接打开电池优化页，请在应用详情页手动设置");
+        } catch (RuntimeException e) {
+            openAppDetails("系统拒绝了电池优化设置，请手动设置");
+        }
     }
 
     /** 主题三档：跟随系统 / 浅色 / 深色。 */

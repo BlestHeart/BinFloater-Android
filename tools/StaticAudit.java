@@ -33,6 +33,7 @@ public class StaticAudit {
         String upd = read(base + "UpdateChecker.java");
         String prov = read(base + "ApkProvider.java");
         String ver = read(base + "VersionUtil.java");
+        String xiaomi = read(base + "XiaomiSettings.java");
         // 反向断言一律对去注释后的代码做，否则会命中「以前写的是…」这类注释
         String mainCode = stripComments(main);
         String floCode = stripComments(flo);
@@ -41,6 +42,21 @@ public class StaticAudit {
         String updCode = stripComments(upd);
         String provCode = stripComments(prov);
         String verCode = stripComments(ver);
+        String xiaomiCode = stripComments(xiaomi);
+
+        System.out.println("=== A0. 小米 / 澎湃适配 ===");
+        check("厂商入口有 XiaomiSettings", xiaomiCode.contains("class XiaomiSettings"), "");
+        check("识别小米红米 POCO", xiaomiCode.contains("\"redmi\"") && xiaomiCode.contains("\"poco\""), "");
+        check("非小米不发厂商入口", xiaomiCode.contains("if (!isXiaomiFamily()) return new Intent[0]"), "");
+        check("澎湃权限页有回退", mainCode.contains("openFirst(XiaomiSettings.overlayIntents(this))"), "");
+        check("后台弹出入口有回退", mainCode.contains("openFirst(XiaomiSettings.backgroundStartIntents(this))"), "");
+        check("自启动入口有回退", mainCode.contains("openFirst(XiaomiSettings.autoStartIntents(this))"), "");
+        check("电池优化有系统 API", mainCode.contains("ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"), "");
+        check("电池权限已声明", manifest.contains("REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"), "");
+        check("厂商跳转捕获安全异常", mainCode.contains("ActivityNotFoundException | SecurityException"), "");
+        check("服务启动不提前报喜", floCode.indexOf("createBubble();") < floCode.indexOf("running = true;"), "");
+        check("权限撤销会停止服务", floCode.contains("!android.provider.Settings.canDrawOverlays(this)"), "");
+        check("任务移除不伪造关闭", floCode.contains("onTaskRemoved(Intent rootIntent)"), "");
 
         System.out.println("=== A. 悬浮窗关键点 ===");
         check("用 TYPE_APPLICATION_OVERLAY", flo.contains("TYPE_APPLICATION_OVERLAY"), "");

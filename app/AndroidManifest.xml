@@ -15,6 +15,8 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <!-- 播摩斯码时要能震动（静音场合靠它敲节奏） -->
     <uses-permission android:name="android.permission.VIBRATE" />
+    <!-- 用户主动点击「忽略电池优化」时才请求；不会自动关闭系统的省电策略。 -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <!-- 下载完 APK 后拉起系统安装器 -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
