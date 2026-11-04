@@ -53,6 +53,8 @@ public class MainActivity extends Activity {
     private long pendingStartUntil = 0L;
     /** 当前配色，buildUi 时从 Palette 取一次。 */
     private Palette pal;
+    /** 上次构建界面时使用的风格，供 onResume 检测后台切换。 */
+    private int shownStyle = -1;
     /**
      * 上次画界面时用的球大小 / 不透明度档位。
      *
@@ -97,6 +99,7 @@ public class MainActivity extends Activity {
         super.onCreate(savedInstanceState);
         prefs = getSharedPreferences("binf", Context.MODE_PRIVATE);
         pal = Palette.get(this);
+        shownStyle = Palette.style(this);
         current = this;
         setContentView(buildUi());
         applySystemBars();
@@ -139,10 +142,12 @@ public class MainActivity extends Activity {
         }
         // 系统深浅色可能在后台切了（跟随系统模式下），回来时重画一遍。
         Palette now = Palette.get(this);
+        int styleNow = Palette.style(this);
         int scaleNow = prefs.getInt("bubble_scale", 1);
         int alphaNow = prefs.getInt("bubble_alpha", 1);
-        if (now != pal || scaleNow != shownScale || alphaNow != shownAlpha) {
+        if (!now.sameAppearance(pal) || styleNow != shownStyle || scaleNow != shownScale || alphaNow != shownAlpha) {
             pal = now;
+            shownStyle = styleNow;
             setContentView(buildUi());
             refreshStatus();
             applySystemBars();
@@ -240,6 +245,7 @@ public class MainActivity extends Activity {
         // 外观
         addSectionTitle("外观");
         addThemeRow();
+        addStyleRow();
         addBubbleLookRow();
 
         // 用法
@@ -305,6 +311,20 @@ public class MainActivity extends Activity {
         if (XiaomiSettings.isXiaomiFamily()) addXiaomiCard();
 
         // 版本 + 重置
+        addSectionTitle("旧版预览入口");
+        LinearLayout previewCard = makeCard();
+        TextView previewNote = new TextView(this);
+        previewNote.setText("下面保留旧版预览入口。正式风格请在上方「界面风格」选择，主界面和悬浮窗会一起切换。");
+        previewNote.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+        previewNote.setTextColor(pal.muted);
+        previewCard.addView(previewNote);
+        Button preview = makeButton("打开三种新 UI 预览", true);
+        preview.setOnClickListener(v -> UiPreviewActivity.open(this, UiPreviewActivity.STYLE_CARDS));
+        LinearLayout.LayoutParams previewLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(42));
+        previewLp.topMargin = dp(10);
+        previewCard.addView(preview, previewLp);
+
         addSectionTitle("版本");
         LinearLayout verCard = makeCard();
         TextView ver = new TextView(this);
@@ -465,6 +485,50 @@ public class MainActivity extends Activity {
     }
 
     /** 球大小 / 不透明度，和长按菜单里那两个循环按钮共用同一份设置。 */
+    /** 四种风格共用一份 prefs；悬浮窗收到 REFRESH_LOOK 后同时重建。 */
+    private void addStyleRow() {
+        LinearLayout card = makeCard();
+        TextView title = new TextView(this);
+        title.setText("界面风格");
+        title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
+        title.setTextColor(pal.text);
+        title.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
+        card.addView(title);
+        TextView note = new TextView(this);
+        note.setText("默认经典。三种新风格会同时应用到主界面、悬浮球和转换面板，旧版预览入口仍保留。");
+        note.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+        note.setTextColor(pal.muted);
+        note.setLineSpacing(dp(3), 1f);
+        LinearLayout.LayoutParams nlp = new LinearLayout.LayoutParams(-1, -2);
+        nlp.topMargin = dp(6);
+        card.addView(note, nlp);
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        int[] styles = {Palette.STYLE_CLASSIC, Palette.STYLE_CARDS, Palette.STYLE_TECH, Palette.STYLE_MATERIAL};
+        String[] labels = {"经典", "卡片", "科技", "Material"};
+        int current = Palette.style(this);
+        for (int i = 0; i < styles.length; i++) {
+            final int style = styles[i];
+            Button b = makeButton(labels[i], style == current);
+            b.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11);
+            b.setOnClickListener(v -> applyUiStyle(style));
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, dp(40), 1f);
+            lp.setMargins(dp(2), dp(10), dp(2), 0);
+            row.addView(b, lp);
+        }
+        card.addView(row);
+    }
+
+    private void applyUiStyle(int style) {
+        prefs.edit().putInt(Palette.PREF_UI_STYLE, Palette.clampStyle(style)).apply();
+        pal = Palette.get(this);
+        shownStyle = Palette.style(this);
+        // 先通知服务，再重建主界面；两边读取同一配置，切换无需重启。
+        applyLookToService();
+        rebuildUiKeepingScroll();
+        applySystemBars();
+    }
+
     private void addBubbleLookRow() {
         LinearLayout card = makeCard();
         TextView t = new TextView(this);
@@ -590,7 +654,7 @@ public class MainActivity extends Activity {
     private void applySystemBars() {
         try {
             Window w = getWindow();
-            boolean dark = Palette.get(this) == Palette.DARK;
+            boolean dark = pal.isDark();
             w.setStatusBarColor(pal.bg);
             w.setNavigationBarColor(pal.bg);
             if (Build.VERSION.SDK_INT >= 30) {
@@ -635,7 +699,7 @@ public class MainActivity extends Activity {
     private LinearLayout makeCard() {
         LinearLayout card = new LinearLayout(this);
         card.setOrientation(LinearLayout.VERTICAL);
-        card.setBackgroundColor(pal.card);
+        card.setBackground(pal.cardBackground());
         card.setPadding(dp(14), dp(14), dp(14), dp(14));
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
@@ -667,10 +731,9 @@ public class MainActivity extends Activity {
         b.setText(label);
         b.setAllCaps(false);
         b.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
-        b.setTextColor(primary ? (pal == Palette.DARK ? 0xFFCFE0FF : pal.text) : pal.muted);
-        int normal = primary ? (pal == Palette.DARK ? 0xFF2B3A5E : pal.accent) : pal.cardHi;
+        b.setTextColor(primary ? pal.primaryText() : pal.text);
+        int normal = primary ? pal.primaryColor() : pal.cardHi;
         b.setBackground(pal.pressedBg(normal));
-        if (primary && pal != Palette.DARK) b.setTextColor(0xFFFFFFFF);
         return b;
     }
 
@@ -678,7 +741,7 @@ public class MainActivity extends Activity {
     private void addFloatingSwitch() {
         LinearLayout card = new LinearLayout(this);
         card.setOrientation(LinearLayout.HORIZONTAL);
-        card.setBackgroundColor(pal.card);
+        card.setBackground(pal.cardBackground());
         card.setPadding(dp(14), dp(12), dp(14), dp(12));
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
@@ -835,7 +898,9 @@ public class MainActivity extends Activity {
         } catch (Exception ignored) {
         }
         pal = Palette.get(this);
+        shownStyle = Palette.style(this);
         setContentView(buildUi());
+        applySystemBars();
         if (floatingSwitch != null) {
             syncingSwitch = true;
             floatingSwitch.setChecked(false);

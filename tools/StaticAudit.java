@@ -44,6 +44,20 @@ public class StaticAudit {
         String verCode = stripComments(ver);
         String xiaomiCode = stripComments(xiaomi);
 
+        System.out.println("=== UI. 主界面与悬浮窗一体化风格 ===");
+        check("默认仍是经典风格", palCode.contains("getInt(PREF_UI_STYLE,STYLE_CLASSIC)"), "");
+        check("三种新风格都保留", palCode.contains("STYLE_CARDS") && palCode.contains("STYLE_TECH") && palCode.contains("STYLE_MATERIAL"), "");
+        check("主界面与悬浮窗共享色板", mainCode.contains("Palette.get(this)") && floCode.contains("Palette.get(this)"), "");
+        check("主界面有风格选择", mainCode.contains("addStyleRow()") && mainCode.contains("PREF_UI_STYLE"), "");
+        check("切换风格通知悬浮窗", mainCode.contains("applyLookToService();") && floCode.contains("ACTION_REFRESH_LOOK"), "");
+        check("面板和球共用圆角配置", floCode.contains("pal.cornerDp") && floCode.contains("panelBackground()"), "");
+        check("输入框使用圆角按下态", floCode.contains("input.setBackground(pal.roundedBg") && floCode.contains("out.setBackground(pal.roundedBg"), "");
+        check("历史胶囊同步风格", floCode.contains("chip.setBackground(pal.roundedBg"), "");
+        check("风格比较不靠对象地址", palCode.contains("sameAppearance") && !floCode.contains("np != pal"), "");
+        check("面板风格切换会重建", floCode.contains("boolean themeChanged = !np.sameAppearance(pal)") && floCode.contains("recolorPanel()"), "");
+        check("旧版预览入口仍保留", mainCode.contains("UiPreviewActivity.open") && manifest.contains(".UiPreviewActivity"), "");
+        check("系统栏按共享色板判断深色", mainCode.contains("boolean dark = pal.isDark()"), "");
+
         System.out.println("=== A0. 小米 / 澎湃适配 ===");
         check("厂商入口有 XiaomiSettings", xiaomiCode.contains("class XiaomiSettings"), "");
         check("识别小米红米 POCO", xiaomiCode.contains("\"redmi\"") && xiaomiCode.contains("\"poco\""), "");

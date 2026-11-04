@@ -14,6 +14,8 @@
 /dist/*.apk
 !/dist/BinFloater.apk
 /dist/*.idsig
+# 风格预览只是临时构建产物，正式 APK 已整合全部风格。
+/dist/previews/
 
 # ─── 系统垃圾 ───────────────────────────────────────────────
 .DS_Store

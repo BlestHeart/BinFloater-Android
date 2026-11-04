@@ -60,12 +60,12 @@ d8 --min-api 34 --output build/dex build/classes/**/*.class
 bash run_tests.sh
 ```
 
-两组共累计 455 项：
+两组共累计 466 项：
 
 | 组 | 项数 | 测什么 |
 |---|---|---|
 | 编解码核心 | 247 | `BinCore` 的双向转换、分隔符、编码回退、阈值判定、长度上限、hex 不截断、Base64 编解码与判定、摩斯码与中文电码、播放节奏；`Ccc` 的双向查表；`VersionUtil` 的版本号比较与 version.json 解析 |
-| 静态审查 | 208 | 读源码做约束检查（见下） |
+| 静态审查 | 219 | 读源码做约束检查（见下） |
 
 ### 为什么有「静态审查」这一组
 
@@ -96,6 +96,12 @@ elif [ "$pass" -lt "$expect_min" ]; then
 `StaticAudit` 读的是 `app/src/com/binf/floater/...` 相对路径。如果 `cd` 到 `build/r_xxx` 里跑会 `NoSuchFileException`。
 
 ---
+
+## 主界面与悬浮窗共享风格
+
+`Palette` 不只存颜色，还存 `ui_style`（默认经典）和圆角配置。主界面与 `FloatingService` 都从它取色板；主界面选择风格后发送 `ACTION_REFRESH_LOOK`，服务重新读取配置、重画悬浮球并丢弃旧面板 View 树，避免主界面换了而面板还是旧配色。
+
+新风格每次取色板会创建新对象，**不能用 `np != pal` 判断是否换肤**；必须比较 `sameAppearance()`。三种新风格与旧版预览入口并存，正式切换只走主界面的「界面风格」卡片。
 
 ## 悬浮窗设计取舍
 

@@ -472,7 +472,7 @@ public class FloatingService extends Service {
         GradientDrawable bgShape = new GradientDrawable();
         bgShape.setShape(GradientDrawable.RECTANGLE);
         bgShape.setColor(fill);
-        bgShape.setCornerRadius(dp(14) * s);
+        bgShape.setCornerRadius(dp(pal.cornerDp) * s);
         // 描边用 accent 的淡色：深色主题下是浅蓝、浅色主题下是深蓝，
         // 两种背景下都有对比度，又不会像纯黑描边那样脏。
         bgShape.setStroke(Math.max(1, dp(1.5f)), withAlpha(pal.accent, 55));
@@ -665,7 +665,7 @@ public class FloatingService extends Service {
         if (bubbleLp == null || wm == null || bubble == null) return;
         // 系统深浅色变了（或转屏）都要重新取一次配色。
         Palette np = Palette.get(this);
-        if (np != pal) {
+        if (!np.sameAppearance(pal)) {
             pal = np;
             applyBubbleStyle();
             recolorPanel();
@@ -855,7 +855,7 @@ public class FloatingService extends Service {
         if (wm == null || bubbleLp == null) return;
         LinearLayout m = new LinearLayout(this);
         m.setOrientation(LinearLayout.VERTICAL);
-        m.setBackgroundColor(pal.cardHi);
+        m.setBackground(pal.roundedBg(pal.cardHi, dp(pal.cornerDp)));
         m.addView(menuBtn("⇄  方向：" + dirLabelText(), v -> {
             cycleDir();
             hideMenu();
@@ -962,7 +962,7 @@ public class FloatingService extends Service {
         bubbleAlpha = clamp(p.getInt("bubble_alpha", bubbleAlpha),
                 0, BUBBLE_ALPHAS.length - 1);
         Palette np = Palette.get(this);
-        boolean themeChanged = np != pal;
+        boolean themeChanged = !np.sameAppearance(pal);
         pal = np;
         loadHistory();
         applyBubbleStyle();
@@ -1107,7 +1107,7 @@ public class FloatingService extends Service {
             if (text.length() >= MAX_HISTORY_CHARS) chip.setText(chip.getText() + "…");
             chip.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10);
             chip.setTextColor(pal.accent);
-            chip.setBackground(pal.pressedBg(pal.cardHi));
+            chip.setBackground(pal.roundedBg(pal.cardHi, dp(pal.material ? 18 : 10)));
             chip.setPadding(dp(8), dp(4), dp(8), dp(4));
             LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
@@ -1131,7 +1131,9 @@ public class FloatingService extends Service {
 
     private ScrollView buildPanel() {
         ScrollView sc = new ScrollView(this);
-        sc.setBackgroundColor(pal.bg);
+        // 面板、按钮和输入框使用与主界面相同的圆角与色板。
+        sc.setClipToOutline(true);
+        sc.setBackground(pal.roundedColor(pal.panelBackground(), dp(pal.cornerDp)));
         // 面板能获焦，返回键要先还给面板，不然按 BACK 没反应（只能去点 ✕）。
         sc.setOnKeyListener((v, keyCode, event) -> {
             if (keyCode == android.view.KeyEvent.KEYCODE_BACK
@@ -1154,7 +1156,7 @@ public class FloatingService extends Service {
 
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(dp(12), dp(10), dp(12), dp(12));
+        root.setPadding(dp(pal.material ? 16 : 12), dp(pal.material ? 14 : 10), dp(pal.material ? 16 : 12), dp(pal.material ? 16 : 12));
         sc.addView(root, new ScrollView.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
@@ -1169,6 +1171,8 @@ public class FloatingService extends Service {
         title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
         title.setTextColor(pal.text);
         title.setTypeface(Typeface.DEFAULT_BOLD);
+        title.setLetterSpacing(pal.tech ? 0.08f : 0f);
+        if (pal.material) title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
         head.addView(title, new LinearLayout.LayoutParams(0,
                 ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
@@ -1243,7 +1247,7 @@ public class FloatingService extends Service {
         input.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
         input.setTextColor(pal.text);
         input.setHintTextColor(pal.muted);
-        input.setBackgroundColor(pal.cardHi);
+        input.setBackground(pal.roundedBg(pal.cardHi, dp(pal.cornerDp * 0.65f)));
         input.setPadding(dp(8), dp(6), dp(8), dp(6));
         input.setMaxLines(3);
         // 只写 TYPE_CLASS_TEXT 是单行语义：回车变成「完成」，与 3 行输入框不符。
@@ -1261,7 +1265,7 @@ public class FloatingService extends Service {
 
         // 输出
         ScrollView out = new ScrollView(this);
-        out.setBackgroundColor(pal.cardHi);
+        out.setBackground(pal.roundedBg(pal.cardHi, dp(pal.cornerDp * 0.65f)));
         LinearLayout.LayoutParams olp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, dp(84));
         olp.topMargin = dp(6);

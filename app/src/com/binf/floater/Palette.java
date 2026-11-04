@@ -1,139 +1,93 @@
 package com.binf.floater;
-
 import android.content.Context;
 import android.content.SharedPreferences;
 import android.content.res.Configuration;
 import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.Drawable;
+import android.graphics.drawable.GradientDrawable;
 import android.graphics.drawable.StateListDrawable;
-
-/**
- * 配色：深色 / 浅色两套。
- *
- * 为什么不直接用 values-night 资源：
- * 悬浮窗是 Service 里用代码建的 View，不跟 Activity 主题走；而且用户要能
- * 手动指定「浅色 / 深色」，光靠系统的 uiMode 做不到。所以两套色板放在代码里，
- * Service 和 Activity 都从这里取，两边颜色永远一致。
- *
- * 资源里那套 colors.xml 只负责 Activity 启动那一瞬间的 windowBackground，
- * 避免浅色系统上先闪一下深色。
- */
+/** 主界面和悬浮窗共享的视觉配置。默认经典，三种新风格可独立保留。 */
 public final class Palette {
-
-    /** 跟随系统。 */
-    public static final int MODE_SYSTEM = 0;
-    /** 强制浅色。 */
-    public static final int MODE_LIGHT = 1;
-    /** 强制深色。 */
-    public static final int MODE_DARK = 2;
-
-    public final int bg;
-    public final int card;
-    public final int cardHi;
-    public final int stroke;
-    public final int text;
-    public final int muted;
-    public final int accent;
-    public final int teal;
-    public final int ok;
-    public final int warn;
-    public final int err;
-
-    private Palette(int bg, int card, int cardHi, int stroke, int text, int muted,
-                    int accent, int teal, int ok, int warn, int err) {
-        this.bg = bg;
-        this.card = card;
-        this.cardHi = cardHi;
-        this.stroke = stroke;
-        this.text = text;
-        this.muted = muted;
-        this.accent = accent;
-        this.teal = teal;
-        this.ok = ok;
-        this.warn = warn;
-        this.err = err;
-    }
-
-    /** 深色：原来那套，和 Windows 版视觉语言一致。 */
-    public static final Palette DARK = new Palette(
-            0xFF0F1117, 0xFF171B24, 0xFF1D2230, 0xFF2A3142,
-            0xFFE6EBF5, 0xFF8992A7, 0xFF7AA2FF, 0xFF5EEAD4,
-            0xFF4ADE80, 0xFFFBBF24, 0xFFF87171);
-
-    /** 浅色：白底 + 深字，teal 换成同色系但压暗，保证在白底上对比度够。 */
-    public static final Palette LIGHT = new Palette(
-            0xFFF4F6FB, 0xFFFFFFFF, 0xFFEDF1F8, 0xFFD7DEEA,
-            0xFF1B2230, 0xFF5C6679, 0xFF2F6BEA, 0xFF0E8C7C,
-            0xFF15803D, 0xFFB45309, 0xFFDC2626);
-
-    /** 用户设置的主题模式（0 跟随系统 / 1 浅色 / 2 深色）。 */
-    public static int mode(Context c) {
-        int m = MODE_SYSTEM;
-        try {
-            SharedPreferences p = c.getSharedPreferences("binf", Context.MODE_PRIVATE);
-            m = p.getInt("theme_mode", MODE_SYSTEM);
-        } catch (Exception ignored) {
-        }
-        if (m == MODE_LIGHT || m == MODE_DARK) return m;
-        return systemMode(c);
-    }
-
-    /** 系统当前是深色还是浅色。 */
-    public static int systemMode(Context c) {
-        int night = c.getResources().getConfiguration().uiMode
-                & Configuration.UI_MODE_NIGHT_MASK;
-        return night == Configuration.UI_MODE_NIGHT_YES ? MODE_DARK : MODE_LIGHT;
-    }
-
-    public static Palette get(Context c) {
-        return mode(c) == MODE_DARK ? DARK : LIGHT;
-    }
-
-    public static String modeLabel(int mode) {
-        switch (mode) {
-            case MODE_LIGHT: return "浅色";
-            case MODE_DARK:  return "深色";
-            default:         return "跟随系统";
-        }
-    }
-
-    /** 当前这套色板是不是深色。 */
-    public boolean isDark() {
-        return this == DARK;
-    }
-
-    /**
-     * 按下态的背景色：深色主题往白里提一点，浅色主题往黑里压一点。
-     *
-     * 以前所有按钮都是 setBackgroundColor(单色)，TextView 本身没有按下反馈 ——
-     * 点下去屏幕上一动不动，用户不知道点到没有，只好连点几下。
-     */
-    public int pressed(int normal) {
-        return blend(normal, isDark() ? 0xFFFFFFFF : 0xFF000000, 0.16f);
-    }
-
-    /**
-     * 带按下态的纯色背景。用 StateListDrawable 而不是 RippleDrawable：
-     * 悬浮窗是 TYPE_APPLICATION_OVERLAY 窗口，ripple 要有宿主 View 的涟漪边界，
-     * 在这种窗口里容易画不出来。
-     */
-    public Drawable pressedBg(int normal) {
-        StateListDrawable sd = new StateListDrawable();
-        sd.addState(new int[]{android.R.attr.state_pressed},
-                new ColorDrawable(pressed(normal)));
-        sd.addState(new int[]{}, new ColorDrawable(normal));
-        return sd;
-    }
-
-    /** 按比例把 a 往 b 混。t=0 是 a，t=1 是 b。 */
-    public static int blend(int a, int b, float t) {
-        float k = t < 0f ? 0f : (t > 1f ? 1f : t);
-        int aa = (a >>> 24) & 0xFF, ar = (a >> 16) & 0xFF, ag = (a >> 8) & 0xFF, ab = a & 0xFF;
-        int ba = (b >>> 24) & 0xFF, br = (b >> 16) & 0xFF, bg = (b >> 8) & 0xFF, bb = b & 0xFF;
-        int ra = Math.round(aa + (ba - aa) * k);
-        int rr = Math.round(ar + (br - ar) * k);
-        int rg = Math.round(ag + (bg - ag) * k);
-        int rb = Math.round(ab + (bb - ab) * k);
-        return (ra << 24) | (rr << 16) | (rg << 8) | rb;
-    }
+ public static final int MODE_SYSTEM=0, MODE_LIGHT=1, MODE_DARK=2;
+ public static final int STYLE_CLASSIC=0, STYLE_CARDS=1, STYLE_TECH=2, STYLE_MATERIAL=3;
+ public static final String PREF_UI_STYLE="ui_style";
+ public static final int MAX_STYLE=3;
+ public final int style,bg,card,cardHi,stroke,text,muted,accent,teal,ok,warn,err;
+ /** 卡片与悬浮面板圆角，单位 dp。 */
+ public final int cornerDp;
+ public final boolean tech,material;
+ private Palette(int bg,int card,int cardHi,int stroke,int text,int muted,int accent,int teal,int ok,int warn,int err){
+  this(STYLE_CLASSIC,bg,card,cardHi,stroke,text,muted,accent,teal,ok,warn,err,14,false,false);
+ }
+ private Palette(int style,int bg,int card,int cardHi,int stroke,int text,int muted,int accent,int teal,int ok,int warn,int err,int cornerDp,boolean tech,boolean material){
+  this.style=style;this.bg=bg;this.card=card;this.cardHi=cardHi;this.stroke=stroke;this.text=text;this.muted=muted;
+  this.accent=accent;this.teal=teal;this.ok=ok;this.warn=warn;this.err=err;this.cornerDp=cornerDp;this.tech=tech;this.material=material;
+ }
+ /** 经典色板原样保留。 */
+ public static final Palette DARK=new Palette(0xFF0F1117,0xFF171B24,0xFF1D2230,0xFF2A3142,0xFFE6EBF5,0xFF8992A7,0xFF7AA2FF,0xFF5EEAD4,0xFF4ADE80,0xFFFBBF24,0xFFF87171);
+ public static final Palette LIGHT=new Palette(0xFFF4F6FB,0xFFFFFFFF,0xFFEDF1F8,0xFFD7DEEA,0xFF1B2230,0xFF5C6679,0xFF2F6BEA,0xFF0E8C7C,0xFF15803D,0xFFB45309,0xFFDC2626);
+ public static int mode(Context c){
+  try{int m=c.getSharedPreferences("binf",Context.MODE_PRIVATE).getInt("theme_mode",MODE_SYSTEM);
+   if(m==MODE_LIGHT||m==MODE_DARK)return m;
+  }catch(Exception ignored){}
+  int night=c.getResources().getConfiguration().uiMode&Configuration.UI_MODE_NIGHT_MASK;
+  return night==Configuration.UI_MODE_NIGHT_YES?MODE_DARK:MODE_LIGHT;
+ }
+ public static int systemMode(Context c){return mode(c);}
+ public static int clampStyle(int s){return s>=STYLE_CARDS&&s<=MAX_STYLE?s:STYLE_CLASSIC;}
+ public static int style(Context c){
+  try{return clampStyle(c.getSharedPreferences("binf",Context.MODE_PRIVATE).getInt(PREF_UI_STYLE,STYLE_CLASSIC));}
+  catch(Exception ignored){return STYLE_CLASSIC;}
+ }
+ public static String styleLabel(int s){
+  switch(clampStyle(s)){case STYLE_CARDS:return "简洁卡片";case STYLE_TECH:return "深色科技";case STYLE_MATERIAL:return "Material You";default:return "经典";}
+ }
+ public static Palette get(Context c){
+  switch(style(c)){
+   case STYLE_CARDS:return new Palette(STYLE_CARDS,0xFFF4F7FB,0xFFFFFFFF,0xFFF0F4FA,0xFFDCE4EF,0xFF192332,0xFF647082,0xFF2A6CBE,0xFF0E8C7C,0xFF15803D,0xFFB45309,0xFFDC2626,20,false,false);
+   case STYLE_TECH:return new Palette(STYLE_TECH,0xFF090E1A,0xFF131D30,0xFF1B2D43,0xFF274B65,0xFFE0EEFF,0xFF829DBE,0xFF50DCDC,0xFF70E8C0,0xFF4ADE80,0xFFFBBF24,0xFFF87171,10,true,false);
+   case STYLE_MATERIAL:return new Palette(STYLE_MATERIAL,0xFFF6F2FA,0xFFFFFCFF,0xFFF0E9F7,0xFFD8CDE1,0xFF23192D,0xFF695C73,0xFF6750A4,0xFF006A60,0xFF146C43,0xFF995A00,0xFFBA1A1A,26,false,true);
+   default:return mode(c)==MODE_DARK?DARK:LIGHT;
+  }
+ }
+ public static String modeLabel(int m){return m==MODE_LIGHT?"浅色":m==MODE_DARK?"深色":"跟随系统";}
+ public boolean isDark(){return this==DARK||tech;}
+ /** 不能比较对象地址：新风格每次读取都会创建新实例。 */
+ public boolean sameAppearance(Palette p){return p!=null&&style==p.style&&isDark()==p.isDark();}
+ public int primaryColor(){return style==STYLE_CLASSIC&&this==DARK?0xFF2B3A5E:accent;}
+ public int primaryText(){return tech?0xFF081920:(style==STYLE_CLASSIC&&this==DARK?0xFFCFE0FF:0xFFFFFFFF);}
+ public int panelBackground(){return style==STYLE_CLASSIC?bg:card;}
+ public int pressed(int normal){return blend(normal,isDark()?0xFFFFFFFF:0xFF000000,0.16f);}
+ /** 经典按钮保持原矩形；新风格统一使用圆角按下态。 */
+ public Drawable pressedBg(int normal){
+  StateListDrawable s=new StateListDrawable();
+  if(style==STYLE_CLASSIC){
+   s.addState(new int[]{android.R.attr.state_pressed},new ColorDrawable(pressed(normal)));
+   s.addState(new int[]{},new ColorDrawable(normal));
+  }else{
+   s.addState(new int[]{android.R.attr.state_pressed},roundedColor(pressed(normal),10));
+   s.addState(new int[]{},roundedColor(normal,10));
+  }
+  return s;
+ }
+ public Drawable roundedBg(int normal,float radiusDp){
+  StateListDrawable s=new StateListDrawable();
+  s.addState(new int[]{android.R.attr.state_pressed},roundedColor(pressed(normal),radiusDp));
+  s.addState(new int[]{},roundedColor(normal,radiusDp));
+  return s;
+ }
+ public static GradientDrawable roundedColor(int color,float radiusDp){
+  GradientDrawable g=new GradientDrawable();g.setColor(color);g.setCornerRadius(radiusDp);return g;
+ }
+ public Drawable cardBackground(){
+  GradientDrawable g=roundedColor(card,14);
+  if(style!=STYLE_CLASSIC)g.setStroke(1,stroke);
+  return g;
+ }
+ public static int blend(int a,int b,float t){
+  float k=t<0?0:(t>1?1:t);
+  int aa=(a>>>24)&255,ar=(a>>16)&255,ag=(a>>8)&255,ab=a&255;
+  int ba=(b>>>24)&255,br=(b>>16)&255,bg=(b>>8)&255,bb=b&255;
+  return (Math.round(aa+(ba-aa)*k)<<24)|(Math.round(ar+(br-ar)*k)<<16)|(Math.round(ag+(bg-ag)*k)<<8)|Math.round(ab+(bb-ab)*k);
+ }
 }
