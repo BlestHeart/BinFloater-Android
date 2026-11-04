@@ -101,7 +101,7 @@ elif [ "$pass" -lt "$expect_min" ]; then
 
 `Palette` 不只存颜色，还存 `ui_style`（默认经典）和圆角配置。主界面与 `FloatingService` 都从它取色板；主界面选择风格后发送 `ACTION_REFRESH_LOOK`，服务重新读取配置、重画悬浮球并丢弃旧面板 View 树，避免主界面换了而面板还是旧配色。
 
-新风格每次取色板会创建新对象，**不能用 `np != pal` 判断是否换肤**；必须比较 `sameAppearance()`。三种新风格与旧版预览入口并存，正式切换只走主界面的「界面风格」卡片。
+新风格每次取色板会创建新对象，**不能用 `np != pal` 判断是否换肤**；必须比较 `sameAppearance()`。临时 UI 预览入口、`UiPreviewActivity`、`UiPreviewView` 和 `build_preview.sh` 已删除；四种风格只在主界面的「界面风格」卡片选择。
 
 ## 悬浮窗设计取舍
 
@@ -543,7 +543,7 @@ v2.0 的改动：
 | APK 大小 | 8.1 MB | 29 KB |
 | `classes.dex` | 105 KB | 29 KB |
 | 源文件 | 9 个 | 3 个 |
-| 测试断言 | 467 项 | 80 项（当前 455） |
+| 测试断言 | 80 项 | 467 项 |
 | 权限 | 6 个（含 INTERNET） | 4 个 |
 
 输入法代码全部在 git 历史里（v1.2 的 tag/commit），需要的话能翻出来。

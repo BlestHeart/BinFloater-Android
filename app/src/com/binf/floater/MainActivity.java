@@ -311,20 +311,6 @@ public class MainActivity extends Activity {
         if (XiaomiSettings.isXiaomiFamily()) addXiaomiCard();
 
         // 版本 + 重置
-        addSectionTitle("旧版预览入口");
-        LinearLayout previewCard = makeCard();
-        TextView previewNote = new TextView(this);
-        previewNote.setText("下面保留旧版预览入口。正式风格请在上方「界面风格」选择，主界面和悬浮窗会一起切换。");
-        previewNote.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
-        previewNote.setTextColor(pal.muted);
-        previewCard.addView(previewNote);
-        Button preview = makeButton("打开三种新 UI 预览", true);
-        preview.setOnClickListener(v -> UiPreviewActivity.open(this, UiPreviewActivity.STYLE_CARDS));
-        LinearLayout.LayoutParams previewLp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, dp(42));
-        previewLp.topMargin = dp(10);
-        previewCard.addView(preview, previewLp);
-
         addSectionTitle("版本");
         LinearLayout verCard = makeCard();
         TextView ver = new TextView(this);
@@ -495,7 +481,7 @@ public class MainActivity extends Activity {
         title.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
         card.addView(title);
         TextView note = new TextView(this);
-        note.setText("默认经典。三种新风格会同时应用到主界面、悬浮球和转换面板，旧版预览入口仍保留。");
+        note.setText("默认经典。选择后，主界面、悬浮球和转换面板会一起切换，不用重启。");
         note.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
         note.setTextColor(pal.muted);
         note.setLineSpacing(dp(3), 1f);

@@ -55,7 +55,7 @@ public class StaticAudit {
         check("历史胶囊同步风格", floCode.contains("chip.setBackground(pal.roundedBg"), "");
         check("风格比较不靠对象地址", palCode.contains("sameAppearance") && !floCode.contains("np != pal"), "");
         check("面板风格切换会重建", floCode.contains("boolean themeChanged = !np.sameAppearance(pal)") && floCode.contains("recolorPanel()"), "");
-        check("旧版预览入口仍保留", mainCode.contains("UiPreviewActivity.open") && manifest.contains(".UiPreviewActivity"), "");
+        check("旧版预览入口与清单均已删除", !mainCode.contains("UiPreviewActivity") && !manifest.contains("UiPreviewActivity"), "");
         check("系统栏按共享色板判断深色", mainCode.contains("boolean dark = pal.isDark()"), "");
 
         System.out.println("=== A0. 小米 / 澎湃适配 ===");

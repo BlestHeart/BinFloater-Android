@@ -40,11 +40,6 @@
         <!-- 把 cacheDir 里的 update.apk 交给系统安装器。
              不用 AndroidX 的 FileProvider（本项目无 Gradle / 无 AndroidX），
              自己写了个只提供这一个文件的 ContentProvider。 -->
-        <activity
-            android:name=".UiPreviewActivity"
-            android:exported="false"
-            android:label="UI 预览" />
-
         <provider
             android:name=".ApkProvider"
             android:authorities="com.binf.floater.apk"
